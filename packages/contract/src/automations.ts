@@ -53,6 +53,8 @@ export const automationFiltersSchema = z.object({
   changedLabels: z.array(z.string()).optional(),
   lookbackDays: z.number(),
   maxRecords: z.number(),
+  /** Label events on pull requests too, not only on issues. */
+  includePullRequests: z.boolean().optional(),
 });
 export type AutomationFilters = z.infer<typeof automationFiltersSchema>;
 

@@ -142,6 +142,43 @@ describe('GithubPoller', () => {
     expect(result.candidates[0]).toMatchObject({ changedLabel: 'triage' });
   });
 
+  it('reads label events on pull requests only when includePullRequests is set', async () => {
+    const pullRequest = {
+      ...item,
+      node_id: 'PR_one',
+      number: 8,
+      html_url: 'https://github.com/acme/demo/pull/8',
+      pull_request: {},
+    };
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args.some((arg) => arg.includes('/timeline'))) {
+        return JSON.stringify([
+          { id: 9, event: 'labeled', created_at: '2026-07-26T02:00:00.000Z', label: { name: 'review-threads' } },
+        ]);
+      }
+      const query = args.find((arg) => arg.startsWith('q=')) ?? '';
+      return JSON.stringify({ items: query.includes('is:pr') ? [pullRequest] : [] });
+    });
+    const labeled: GithubAutomationDefinition = {
+      ...definition,
+      events: ['issue.labeled'],
+      filters: { ...definition.filters, changedLabels: ['review-threads'] },
+    };
+    const options = { since: '2026-07-25T23:58:00.000Z' };
+
+    const issuesOnly = await new GithubPoller({ run }).poll('acme', 'demo', labeled, options);
+    expect(issuesOnly.candidates).toEqual([]);
+
+    run.mockClear();
+    const withPullRequests = await new GithubPoller({ run }).poll('acme', 'demo', {
+      ...labeled,
+      filters: { ...labeled.filters, includePullRequests: true },
+    }, options);
+    expect(withPullRequests.candidates).toMatchObject([{ event: 'issue.labeled', number: 8 }]);
+    const queries = run.mock.calls.flatMap(([, args]) => args.filter((arg) => arg.startsWith('q=')));
+    expect(queries).toEqual([expect.stringContaining('is:issue'), expect.stringContaining('is:pr')]);
+  });
+
   it('builds activity-specific queries for opened and label-event drains', () => {
     expect(buildSearchQuery('acme', 'demo', definition, 'issues', 'created', '2026-07-25T00:00:00.000Z'))
       .toContain('created:>=2026-07-25T00:00:00.000Z');

@@ -23,6 +23,8 @@ export const automationFiltersSchema = z
     changedLabels: stringList,
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
+    /** Label events on pull requests too, not only on issues. */
+    includePullRequests: z.boolean().optional(),
   })
   .passthrough();
 

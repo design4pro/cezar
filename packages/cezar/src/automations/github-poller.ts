@@ -102,6 +102,11 @@ export class GithubPoller {
     }
     if (labelEvents.length) {
       sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true });
+      // Pull requests get a source of their own rather than the 'mixed' family: 'mixed' emits no
+      // `is:` qualifier, and /search/issues rejects such a query with HTTP 422.
+      if (definition.filters.includePullRequests) {
+        sources.push({ family: 'prs', activity: 'updated', opened: false, labels: true });
+      }
     }
 
     const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
@@ -153,7 +158,7 @@ export class GithubPoller {
             });
           }
         }
-        if (source.labels && !item.pull_request) {
+        if (source.labels && (source.family === 'prs' || !item.pull_request)) {
           const timeline = await this.timeline(owner, repo, item.number);
           const events = reconstructLabelEvents(owner, repo, item, timeline);
           for (const event of events) {
