@@ -148,6 +148,8 @@ export const automationRuntimeStateSchema = z.object({
   baselineAt: z.string().optional(),
   cursor: automationCursorSchema.optional(),
   frozenHighWatermark: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+  /** The cursor a widening climb ran to the search ceiling at without advancing. */
+  widenExhaustedAt: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
   backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
   nextCheckAt: z.string().optional(),
   lastSuccessAt: z.string().optional(),
