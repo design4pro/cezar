@@ -192,6 +192,15 @@ export class SkillsUpdateService {
       const state = { ...this.makeState(scopes), status: 'current' as const, checkedAt };
       this.states.set(repoRoot, state); return state;
     }
+    // CEZ_SKILLS_AUTO_UPDATE=0 turns off the check as well as the update it feeds: otherwise every
+    // project still spawns `npx skills check` when it registers and whenever the cockpit asks.
+    if (process.env.CEZ_SKILLS_AUTO_UPDATE === '0') {
+      const checkedAt = new Date(this.now()).toISOString();
+      const reason = 'skills updates are disabled on this host (CEZ_SKILLS_AUTO_UPDATE=0)';
+      const scopes = [blankScope('project'), blankScope('global')].map((scope) => ({ ...scope, status: 'unavailable' as const, checkedAt, reason }));
+      const state = { ...this.makeState(scopes), status: 'unavailable' as const, checkedAt };
+      this.states.set(repoRoot, state); return state;
+    }
     const lockPath = join(this.home, '.cache', 'cez', 'skills-update.lock');
     let release: (() => Promise<void>) | undefined;
     try {
