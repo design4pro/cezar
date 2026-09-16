@@ -1,0 +1,3 @@
+name: spec-to-tickets
+description: Promote the ticket frontier, then slice at most one merged spec into tracer-bullet tickets (afk-to-tickets).
+skills: [afk-to-tickets]

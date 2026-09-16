@@ -1,0 +1,13 @@
+{
+  "name": "Spec to tickets",
+  "description": "Weekday mornings: promote ticket frontiers, then slice at most one newly merged spec into tickets.",
+  "kind": "schedule",
+  "schedule": { "type": "weekdays", "hour": 7, "minute": 0 },
+  "task": {
+    "prompt": "Run the afk-to-tickets skill for {{project}} on {{date}}: promote the frontier, then slice at most one unsliced spec.",
+    "workflow": "spec-to-tickets",
+    "worktree": true,
+    "autonomous": true,
+    "generateFollowups": false
+  }
+}

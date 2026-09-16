@@ -1,0 +1,52 @@
+name: implement-ticket
+description: Implement one ready-for-agent issue test-first from its Agent Brief, pass the validation gate, open a PR and review it. Never merges.
+steps:
+  - id: implement
+    name: Check readiness and implement
+    skill: om-fix
+    prompt: |
+      {{task}}
+
+      This workflow has no om-root-cause step: the issue's `## Agent Brief` comment is your brief.
+
+      Check readiness before claiming. Stop without changing anything if any of these hold:
+      - the issue is closed, or carries `in-progress`, `ready-for-human`, `needs-info` or `blocked`;
+      - it has no Agent Brief comment, or the brief says a spec is needed;
+      - an issue listed under "Blocked by" is still open;
+      - three or more open PRs labeled `review` are authored by the current `gh` user (WIP limit).
+      To stop: write `STOP: <reason>` as the first progress-log line of this run's handoff file, then end with CEZ:DONE. Later steps read that line and skip.
+
+      Otherwise implement per om-fix, with these rules:
+      - Test first at the brief's Test seam, through the module's interface: write the failing test, see it fail, then make it pass (afk-codebase-design).
+      - Build one complete vertical slice, inside the acceptance criteria and "Out of scope" (SDLC.md, Scoping rule (SLC)).
+      - Use CONTEXT.md terms. Add or update entries for any concept you introduce or rename (afk-domain-modeling).
+      - Record each decision the brief left open as a Resolved assumptions row in the handoff file, for the PR body.
+  - id: gate
+    name: Validation gate
+    command: (test -d node_modules || npm ci) && npm run typecheck && npm test && npm run test:unit && npm run build && npm run test:package
+    onFail:
+      retry: implement
+      max: 2
+  - id: pr
+    name: Open the PR
+    skill: om-open-pr
+    prompt: |
+      {{task}}
+
+      If the first progress-log line of this run's handoff file starts with `STOP:`, end at once with CEZ:DONE.
+
+      Otherwise open the PR per om-open-pr, with the issue number from the task as the issue id. Put the Resolved assumptions table from the handoff file in the PR body, and reference the issue with `Fixes #<number>`.
+  - id: review
+    name: Review the PR
+    skill: om-auto-review-pr
+    prompt: |
+      {{task}}
+
+      End at once with CEZ:DONE if either holds:
+      - the first progress-log line of this run's handoff file starts with `STOP:`;
+      - no PR is open for this branch (`gh pr list --head "$(git branch --show-current)"`).
+
+      Otherwise review that PR per om-auto-review-pr:
+      - Report the Standards axis and the Spec axis separately (CODE_REVIEW.md, Two axes).
+      - On the Spec axis, check each acceptance criterion from the issue's Agent Brief.
+      - Never merge, and never run om-approve-merge-pr.
