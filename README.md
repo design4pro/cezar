@@ -96,12 +96,15 @@ and an orchestrator keeps a whole queue of them moving.
   **Inbox** (`CEZ_FOLLOWUPS=1`) and an agent's leftover follow-ups become the
   next tasks too — one click each.
 - 🤖 **"Autonomous" means you still have to sit there.** Flip the **Autonomous**
-  flag and a run never parks to ask — it keeps going until the task is done. Pair
-  it with a **skill** (a Markdown playbook) and you've got fire-and-forget
-  automation: hand off "fix this", "upgrade that", "triage these" and walk away.
-- ✅ **The agent finishes and you have to trust it.** cezar ends non-trivial runs at
-  a **review gate**: inspect the diff, send notes back into the same session, or
-  push a **draft PR** — never an auto-merge.
+  flag and a run never parks to ask — it keeps going until the task is done, and it
+  always skips the review gate below. Pair it with a **skill** (a Markdown playbook)
+  and you've got fire-and-forget automation: hand off "fix this", "upgrade that",
+  "triage these" and walk away.
+- ✅ **The agent finishes and you have to trust it.** Nothing ever auto-merges — the
+  work rests on the task's own branch until you act on it. Switch on the optional
+  **review gate** (Settings → Agents, or `CEZ_REVIEW_GATE=1`; off by default) and a
+  non-autonomous run with changes parks at `review` instead of finishing: inspect the
+  diff, send notes back into the same session, or push a **draft PR**.
 - ♻️ **Losing a session when it fails.** Every run records its `claude` session id.
   Take it over interactively in one click (`claude --resume <id>`), or continue it
   in-process from the cockpit.
@@ -167,7 +170,7 @@ CLIs you are already logged into, `claude` by default.
 
 > **Just kicking the tires?** Set `CEZ_DRY_RUN=1` to run against a bundled mock
 > instead of the real CLI — the whole cockpit works with no `claude` login, so
-> you can explore runs, diffs, variants and the review gate offline.
+> you can explore runs, diffs, variants and the optional review gate offline.
 
 ### Nightly builds — help us shape cezar 🌙
 
@@ -219,7 +222,8 @@ You describe a task. cezar runs it as a **workflow** — an ordered list of agen
 steps and shell checks — shelling out to your locally installed agent CLI
 (Claude Code by default; Codex and OpenCode are drop-in alternatives, per task
 or per step). Each task gets its own git worktree; the cockpit streams every
-event live and parks the run at a review gate when there's a diff to inspect.
+event live and, when the optional review gate is on, parks a run with a diff at
+`review` for you to inspect.
 
 ```
    you type a task
@@ -243,13 +247,15 @@ event live and parks the run at a review gate when there's a diff to inspect.
    │ ·Markdown   │                         │  Skills · Workflows      │
    └─────────────┘                         └──────────────────────────┘
                                                   │
-                                          review gate: read the diff →
+                                          review gate (optional): read the diff →
                                           send notes back · draft PR · finish
 ```
 
 When a check fails, the workflow can loop back to an earlier step (bounded by
 `max`) with the failing output appended to the retried agent's prompt. Nothing
-auto-merges: a run with changes rests in `review` until you act on it.
+auto-merges. With the review gate on, a run with changes rests in `review` until
+you act on it; with it off — the default — the run settles to `done` and leaves
+its diff in the worktree.
 
 ---
 
@@ -259,10 +265,10 @@ Three words, no jargon — **task**, **skill**, **chain**:
 
 - 📋 **Tasks** are the unit of work. Every task is a **run**: `queued → running →
   review / done / failed / cancelled`, with a live event log, per-step token and
-  cost usage, cancel/delete, and — for anything with a diff — a review gate. Attach
-  screenshots, PDFs, `.txt` or `.md` files to the task (paperclip, ⌘V or drag-drop;
-  the agent gets each one as a real file on disk), or send follow-up messages into
-  the live session while it works.
+  cost usage, cancel/delete, and — for anything with a diff, once the optional review
+  gate is on — a stop at `review`. Attach screenshots, PDFs, `.txt` or `.md` files to
+  the task (paperclip, ⌘V or drag-drop; the agent gets each one as a real file on
+  disk), or send follow-up messages into the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
@@ -298,14 +304,15 @@ Five moves that make the cockpit worth the browser tab:
   unlimited) and reclaims the rest — directory only, the `cez/<id8>` branch is
   always kept, so the work stays recoverable. Settings → Resources shows every
   worktree's disk use with per-row delete and a **Reclaim now** button.
-- 🛡️ **Review gate.** A finished run with changes waits in `review`. Read the diff,
-  type notes that go straight back into the agent's session, or push a
-  `gh pr create --draft`. You stay the merge button.
+- 🛡️ **Review gate (opt-in).** Switch it on and a finished run with changes waits in
+  `review`. Read the diff, type notes that go straight back into the agent's session,
+  or push a `gh pr create --draft`. Left off — the default — the run settles to `done`
+  with its diff still in the worktree. Either way, you stay the merge button.
 - 📱 **Runs on your coding server, drives from your pocket.** The cockpit is a
   responsive web app streaming over SSE, so the box running cezar can be a
   **VPS, cloud, or dedicated server** you never sit in front of. Point a browser
   — laptop or **phone** — at it and run an **always-on coding team** on the move:
-  start tasks, watch them live, and hit the review gate from anywhere.
+  start tasks, watch them live, and hit the optional review gate from anywhere.
 
 ---
 
