@@ -143,6 +143,8 @@ The intake labels must exist first (`gh label create <label>`).
 
 **`maxRecords` is an evaluation budget, not a launch cap.** A poll turns each record into observations — one per opened event, one per reconstructed label event — sorts them oldest-first and evaluates only the first `maxRecords` (`automations/github-poller.ts`). Triage applies four labels within seconds and the decisive one lands last, so `implement-ticket` with `maxRecords: 2` evaluated `documentation` and `priority-low` and never reached `ready-for-agent`: the trigger read as dead. Keep the schema default of 25. Cost is bounded by the WIP limit and the per-skill caps below, never by starving this budget. A truncated poll widens only once a cursor exists, and `cez automation check` never widens at all, so the preview of a starved filter shows a permanent zero.
 
+**A repo-local skill is not invocable by name.** cezar injects a step's skill body as the agent's system prompt (`workflows/run.ts`), but materializes only a *team* skill into `.claude/skills/` (`skills-remote.ts`, gated on `source === 'team'`). An agent that sees an `afk-*` name and calls the `Skill` tool gets `Unknown skill` and must recover on its own - both triage runs opened exactly that way before recovering. So write an `afk-*` skill that never asks to be invoked, and point cross-references at `.ai/skills/<name>/SKILL.md` rather than naming a skill as something to load.
+
 **Guardrails:**
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.

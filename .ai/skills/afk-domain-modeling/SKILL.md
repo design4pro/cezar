@@ -5,6 +5,8 @@ description: Keep cezar's domain language (CONTEXT.md) and decision record (docs
 
 # AFK domain modeling
 
+**These instructions are already in your system prompt.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
+
 Adapted from mattpocock/skills `domain-modeling` for unattended runs. Nobody answers questions here: where the original asks the user, you decide, and you record the decision so a reviewer can overturn it on the PR.
 
 ## The files

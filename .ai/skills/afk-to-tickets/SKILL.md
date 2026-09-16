@@ -5,13 +5,15 @@ description: Slice a merged spec into tracer-bullet GitHub tickets with blocking
 
 # AFK to tickets
 
+**These instructions are already in your system prompt.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
+
 Adapted from mattpocock/skills `to-tickets` for unattended runs. The spec file stays the source of truth: tickets link to it and never copy it.
 
 **Caps:** at most one spec and eight tickets per run. Never close, retitle or re-scope an existing issue.
 
 ## 0. Setup
 
-Load `.ai/agentic.config.json` and `.ai/trackers/github.md`, and use their operations and label guards. Read `CONTEXT.md` and the ADRs for the area. Follow `afk-domain-modeling` and `afk-codebase-design` for vocabulary.
+Load `.ai/agentic.config.json` and `.ai/trackers/github.md`, and use their operations and label guards. Read `CONTEXT.md` and the ADRs for the area. For vocabulary, read `.ai/skills/afk-domain-modeling/SKILL.md` and `.ai/skills/afk-codebase-design/SKILL.md`.
 
 ## 1. Promote the frontier (every run, before slicing)
 

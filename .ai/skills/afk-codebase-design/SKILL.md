@@ -5,6 +5,8 @@ description: Shared vocabulary and rules for designing deep modules in cezar - m
 
 # AFK codebase design
 
+**These instructions are already in your system prompt.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
+
 Adapted from mattpocock/skills `codebase-design` for unattended runs. Use these words exactly in designs, briefs, review findings and PR bodies. Do not substitute "component", "service", "API" or "boundary".
 
 ## Vocabulary

@@ -5,6 +5,8 @@ description: Periodic unattended architecture review - find deepening opportunit
 
 # AFK architecture review
 
+**These instructions are already in your system prompt.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
+
 Adapted from mattpocock/skills `improve-codebase-architecture` for unattended runs.
 - **Scope of changes:** read-only on code; the only writes are GitHub issues.
 - **Instead of asking the user to pick,** each candidate gets a strength, and triage decides.
@@ -12,7 +14,7 @@ Adapted from mattpocock/skills `improve-codebase-architecture` for unattended ru
 
 ## 0. Setup
 
-Load the `afk-codebase-design` skill and use its vocabulary exactly: module, interface, depth, seam, adapter, leverage, locality. Read `CONTEXT.md` so candidates use domain names ("the Automation poll module", not "the poller helper"). Read every ADR in `docs/adr/`. Load `.ai/trackers/github.md`.
+Read `.ai/skills/afk-codebase-design/SKILL.md` and use its vocabulary exactly: module, interface, depth, seam, adapter, leverage, locality. Read `CONTEXT.md` so candidates use domain names ("the Automation poll module", not "the poller helper"). Read every ADR in `docs/adr/`. Load `.ai/trackers/github.md`.
 
 ## 1. Scope: hot spots, not the whole repo
 

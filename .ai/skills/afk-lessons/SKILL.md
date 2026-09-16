@@ -5,6 +5,8 @@ description: Turn repeated mistakes from recent agent PRs into durable rules - a
 
 # AFK lessons
 
+**These instructions are already in your system prompt.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
+
 Institutional memory: every mistake that repeats becomes a rule, so it does not repeat again.
 - **Output:** at most one PR per run, or nothing.
 - **Rules only get added or tightened.** Never weaken, delete or loosen one.
