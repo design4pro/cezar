@@ -276,6 +276,9 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
   });
 
+  // Two `runToEnd` cycles, ~2.2 s each in dry run, against the 5 s default leaves ~0.5 s of
+  // headroom — enough alone, never enough under full-suite contention, so this timed out in
+  // every full run and passed in isolation. The single-cycle cases below already carry 30 s.
   it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
     delete process.env.CEZ_AUTOMATIONS;
     delete process.env.CEZ_API_URL;
@@ -290,7 +293,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
       delete process.env.CEZ_API_URL;
     }
     expect(capturedSystemPrompt()).not.toContain('cez automation');
-  });
+  }, 30_000);
 
   it('no override: the config default reaches the CLI and is echoed on the record', async () => {
     const id = await runToEnd({ task: 'do the thing' });
