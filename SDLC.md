@@ -145,6 +145,8 @@ The intake labels must exist first (`gh label create <label>`).
 
 **A repo-local skill is not invocable by name.** cezar injects a step's skill body as the agent's system prompt (`workflows/run.ts`), but materializes only a *team* skill into `.claude/skills/` (`skills-remote.ts`, gated on `source === 'team'`). An agent that sees an `afk-*` name and calls the `Skill` tool gets `Unknown skill` and must recover on its own - both triage runs opened exactly that way before recovering. So write an `afk-*` skill that never asks to be invoked, and point cross-references at `.ai/skills/<name>/SKILL.md` rather than naming a skill as something to load.
 
+**A cause is not established until an experiment reproduces it.** Three confident causal claims about the same six lines of run output were wrong in one session: "traced to `scripts/mock-claude.mjs`" named the writer but never the caller; `ps eww` cannot read another process's environment on macOS, so an empty grep proved nothing about `CEZ_DRY_RUN`; and the two suites that do set `CEZ_DRY_RUN` turned out to be immune, because a real run's env wins over the host (`core/agent-env.ts`). A five-line probe - point `CEZ_HANDOFF_FILE` at a temp file, run one suite, read the file back - settled it in six seconds and named a different file. State a mechanism as a hypothesis until a controlled run reproduces it, and cite that run.
+
 **Guardrails:**
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.
