@@ -149,6 +149,8 @@ The intake labels must exist first (`gh label create <label>`).
 
 **Never file an issue carrying the label that triggers its own automation.** A poll turns one record into one observation per opened event AND one per label event, and the durable receipt that prevents a relaunch keys on the automation plus the event - not on the issue - so an issue created with `needs-triage` already attached produces two distinct events in one batch and launches two concurrent triage runs. Issue #4 was created that way and received two Agent Briefs, from runs `7f872da9` and `a82fea56`, 100 seconds apart. File the issue bare and let the `issue.opened` trigger claim it, or add the intake label in a later poll window. The cursor is not the guard here: the scheduler polls from `cursor - 120 s` (`automations/scheduler.ts`), so an already-consumed event stays eligible on later polls and only the receipt stops the second launch.
 
+**Pausing an automation and enabling it again silently drops everything that arrived in between.** `enable` sets `baselineAt` to the current time and moves the cursor with it, and the scheduler discards every candidate at or below the baseline (`automations/scheduler.ts`), so the gap is skipped permanently rather than caught by the next poll. That is deliberate on a first enable - a backlog is never launched - and a trap for an operator who pauses to investigate something. Check that the pause window was empty before enabling again, and to act on an item that is already pending use `cez automation check <id> --execute`, which launches it without touching the baseline.
+
 **Guardrails:**
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.
