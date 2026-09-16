@@ -17,8 +17,8 @@ Work enters through two paths: a free-form task brief handed to an agent, or a f
 
 | Stage | What happens | Driven by | Done when |
 |---|---|---|---|
-| Intake | A ticket or task brief is filed in GitHub with enough detail to act on. | Anyone | Ticket exists |
-| Triage | Confirm the issue is real, still unfixed on `main`, and not already claimed or covered by an open PR. Read-only; stops the chain cleanly when there is nothing to do. | `om-verify-in-repo` or a human | Confirmed actionable, or closed as no-action |
+| Intake | A ticket or task brief is filed in GitHub with enough detail to act on. Agents file tickets too: `afk-to-tickets` slices a merged spec into tracer-bullet tickets, and `afk-architecture-review` files deepening candidates. | Anyone, `afk-to-tickets`, `afk-architecture-review` | Ticket exists |
+| Triage | Confirm the issue is real, still unfixed on `main`, and not already claimed or covered by an open PR. Then write an Agent Brief and set exactly one intake label (see Intake labels below). Read-only on code; stops the chain cleanly when there is nothing to do. | `afk-triage`, `om-verify-in-repo`, or a human | One intake label set, or no action needed |
 | Claim | The author claims the ticket so concurrent agents back off. See the claim protocol below. | `om-fix` / `om-auto-create-pr`, or a human | Claim visible on the ticket |
 | Implement | Locate the minimal change surface (`om-root-cause`, read-only), then implement the change with regression tests and run the validation gate. Task briefs without a ticket go through `om-auto-create-pr`, which plans, implements phase by phase in an isolated worktree, and runs the same gate. | `om-root-cause` + `om-fix`, `om-auto-create-pr`, or a human author | Change complete, validation gate green |
 | PR | Commit, push, and open a PR against `main` with normalized labels. On a hand-worked branch, `om-check-and-commit` runs the gate, fixes obvious drift, and pushes when green. | `om-open-pr`, `om-auto-create-pr`, or `om-check-and-commit` | Open, labeled PR |
@@ -64,6 +64,21 @@ When signals conflict, pick the higher label and say why in the label comment. A
 
 One label lives outside this taxonomy: `do-not-close`, applied by humans to issues that housekeeping skills must never auto-close. Skills only ever read it.
 
+## Intake labels
+
+Intake labels go on issues only, one at a time, and say who acts on the issue next. They come before the PR pipeline above. The list lives in `.ai/agentic.config.json` as `labels.intake`.
+
+| Label | Meaning | Set by |
+|---|---|---|
+| `needs-triage` | Not evaluated yet | Humans; `afk-architecture-review` for its `Strong` candidates |
+| `needs-info` | Waiting on the reporter | `afk-triage`, humans |
+| `ready-for-agent` | Briefed and safe to implement unattended. Adding it launches the `implement-ticket` automation. | `afk-triage`, `afk-to-tickets` (frontier tickets only), humans |
+| `ready-for-human` | Briefed, but needs a person: security, `risk-high`, a spec, a duplicate, a decline, or a judgement call | `afk-triage`, `afk-to-tickets`, `afk-architecture-review`, humans |
+
+- **Transitions:** a new issue, or one labeled `needs-triage`, moves to exactly one of `needs-info`, `ready-for-agent` or `ready-for-human`. When the reporter answers a `needs-info` issue, a human moves it back to `needs-triage`, and triage runs again.
+- **Limits on skills:** automated skills never add `ready-for-agent` to `risk-high` or `security` work, never remove an intake label a human set, and never close an issue.
+- **Human override:** a human may move any issue to any intake label at any time.
+
 ## The QA gate
 
 The one hard rule of this process: **a PR carrying `needs-qa` must not merge until it also carries `qa-approved`, even when every other check is green.** `om-merge-buddy` classifies such a PR as blocked; `om-approve-merge-pr` refuses to merge it.
@@ -91,6 +106,47 @@ Every PR passes the full validation gate before review sign-off, in this order:
 - `npm run test:package`
 
 Any non-zero exit fails the gate and blocks the PR. `npm test` is the fast server + cockpit unit/component suite (vitest) and `npm run test:unit` the node:test core-module suite; the build includes the `check:pack` tarball gate, and `npm run test:package` builds a release tarball, installs it into an isolated consumer, and exercises the offline CLI workflow. User-facing changes also need the separate real-browser QA (`npm run test:e2e`) described by the QA gate. The implementing skills run the configured gate before opening a PR, and `om-check-and-commit` runs it before pushing a hand-worked branch. The command list lives in `.ai/agentic.config.json`; when it changes, update it there and in this section together.
+
+## Scoping rule (SLC)
+
+Every spec, ticket and agent-sized issue is scoped **Simple, Lovable, Complete** (Jason Cohen, "Your customers hate MVPs. Make a SLC instead"), not as a minimum viable product:
+
+- **Simple**: the narrowest scope that does one job. Split anything that does not fit one ticket, or one fresh agent context.
+- **Lovable**: no rough edge is left "for later" inside that scope. Error states, empty states, docs and tests ship with the change.
+- **Complete**: the slice is useful and verifiable on its own. A change that only works once a later ticket lands is a layer, not a slice: merge it into the slice it serves.
+
+A request that fails the rule is re-scoped (a spec, or tickets), not implemented partially.
+
+## Unattended decisions
+
+The afk-* skills (`.ai/skills/`) run with no human to ask. Where a person would be consulted, the skill picks the most reversible reasonable option and records it as a row in a **Resolved assumptions** table (`# | Question | Applied default | Why`) in the brief, spec or PR body it writes. Humans review those rows at the PR, and overturning one is an ordinary review finding. Domain terms and decisions follow `afk-domain-modeling`: `CONTEXT.md` is updated in the same change, and ADRs are written only when a decision is hard to reverse, surprising, and a real trade-off.
+
+## Repo automations
+
+This repository runs its own intake-to-PR loop on the cockpit. Workflows live in `.ai/cezar/workflows/`, and the automation definitions in `.ai/automations/`.
+
+| Automation | Trigger | Workflow |
+|---|---|---|
+| `triage.json` | `issue.opened`, or `needs-triage` added | `triage` (`afk-triage`) |
+| `implement-ticket.json` | `ready-for-agent` added | `implement-ticket`: read the brief and check blockers and WIP, implement test-first, validation gate (retried twice), `om-open-pr`, `om-auto-review-pr` |
+| `spec-to-tickets.json` | weekdays 07:00 | `spec-to-tickets` (`afk-to-tickets`) |
+| `architecture-review.json` | Mondays 06:00 | `architecture-review` (`afk-architecture-review`) |
+| `lessons.json` | Fridays 16:00 | `lessons` (`afk-lessons`) |
+
+**Bootstrap** on a running cockpit:
+1. `cez automation create --file .ai/automations/<name>.json` for each definition. They are created paused.
+2. `cez automation check <id>` for polls, or `cez automation run <id>` for schedules.
+3. `cez automation enable <id>`.
+4. After editing a definition, run `cez automation update <id> --file ...`.
+
+The intake labels must exist first (`gh label create <label>`).
+
+**Guardrails:**
+- Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
+- `implement-ticket` stops when three or more agent PRs already wait in `review`.
+- Triage never sends `risk-high` or `security` work to an agent.
+- Every skill carries hard caps: one issue per triage, eight tickets per spec, three architecture issues, one lessons PR.
+- To stop it all, `cez automation pause <id>`, or start the cockpit with `CEZ_AUTOMATIONS=0`.
 
 ## Amending this process
 

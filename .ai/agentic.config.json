@@ -50,6 +50,12 @@
       "risk-low",
       "risk-medium",
       "risk-high"
+    ],
+    "intake": [
+      "needs-triage",
+      "needs-info",
+      "ready-for-agent",
+      "ready-for-human"
     ]
   },
   "qaGate": true,
