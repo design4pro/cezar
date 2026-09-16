@@ -141,6 +141,8 @@ This repository runs its own intake-to-PR loop on the cockpit. Workflows live in
 
 The intake labels must exist first (`gh label create <label>`).
 
+**`maxRecords` is an evaluation budget, not a launch cap.** A poll turns each record into observations — one per opened event, one per reconstructed label event — sorts them oldest-first and evaluates only the first `maxRecords` (`automations/github-poller.ts`). Triage applies four labels within seconds and the decisive one lands last, so `implement-ticket` with `maxRecords: 2` evaluated `documentation` and `priority-low` and never reached `ready-for-agent`: the trigger read as dead. Keep the schema default of 25. Cost is bounded by the WIP limit and the per-skill caps below, never by starving this budget. A truncated poll widens only once a cursor exists, and `cez automation check` never widens at all, so the preview of a starved filter shows a permanent zero.
+
 **Guardrails:**
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.

@@ -7,7 +7,7 @@
   "filters": {
     "changedLabels": ["ready-for-agent"],
     "excludeLabels": ["in-progress", "ready-for-human", "needs-info", "blocked", "do-not-merge", "risk-high", "security"],
-    "maxRecords": 2,
+    "maxRecords": 25,
     "lookbackDays": 7
   },
   "task": {

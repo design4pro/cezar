@@ -7,7 +7,7 @@
   "filters": {
     "changedLabels": ["needs-triage"],
     "excludeLabels": ["in-progress", "do-not-close", "blocked", "needs-info", "ready-for-agent", "ready-for-human"],
-    "maxRecords": 3,
+    "maxRecords": 25,
     "lookbackDays": 7
   },
   "task": {
