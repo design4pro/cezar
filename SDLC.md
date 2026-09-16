@@ -147,6 +147,8 @@ The intake labels must exist first (`gh label create <label>`).
 
 **A cause is not established until an experiment reproduces it.** Three confident causal claims about the same six lines of run output were wrong in one session: "traced to `scripts/mock-claude.mjs`" named the writer but never the caller; `ps eww` cannot read another process's environment on macOS, so an empty grep proved nothing about `CEZ_DRY_RUN`; and the two suites that do set `CEZ_DRY_RUN` turned out to be immune, because a real run's env wins over the host (`core/agent-env.ts`). A five-line probe - point `CEZ_HANDOFF_FILE` at a temp file, run one suite, read the file back - settled it in six seconds and named a different file. State a mechanism as a hypothesis until a controlled run reproduces it, and cite that run.
 
+**Never file an issue carrying the label that triggers its own automation.** A poll turns one record into one observation per opened event AND one per label event, and the per-poll dedupe keys on the observation, not on the issue - so an issue created with `needs-triage` already attached yields two candidates in the same batch and launches two concurrent triage runs. Issue #4 was created that way and received two Agent Briefs, from runs `7f872da9` and `a82fea56`, 100 seconds apart. File the issue bare and let the `issue.opened` trigger claim it, or add the intake label in a later poll window.
+
 **Guardrails:**
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.
