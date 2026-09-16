@@ -11,6 +11,9 @@ export default mergeConfig(
       name: 'web',
       environment: 'jsdom',
       include: ['src/**/*.test.{ts,tsx}'],
+      // Installs a real `localStorage` on the global — see the file for the Node/vitest
+      // interaction it works around.
+      setupFiles: ['./vitest.setup.ts'],
     },
   }),
 )
