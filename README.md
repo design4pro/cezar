@@ -837,6 +837,7 @@ npm run dev          # server (API :4321) + Vite dev server, opens the cockpit i
 npm run dev:server   # tsx packages/cezar/src/index.ts — the API server alone
 npm run dev:web      # Vite dev server alone (proxies /api to :4321)
 npm run build        # tsc → packages/cezar/dist/, vite build → packages/cezar/web/dist/, then the pack gate
+npm run rebuild      # build, then restart the launchd cockpit service (guarded; --build-only, --force)
 npm run typecheck    # server + web (tsc --noEmit)
 npm test             # vitest — server + cockpit unit suites
 npm run test:unit    # node:test — fast core-module tests

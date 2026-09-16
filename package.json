@@ -18,6 +18,7 @@
     "build:server": "npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",
+    "rebuild": "node scripts/rebuild.mjs",
     "dev": "node scripts/dev.mjs",
     "dev:server": "npm run dev -w @open-mercato/cezar --",
     "dev:web": "npm run dev -w @open-mercato/cezar-web --",
