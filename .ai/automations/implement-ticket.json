@@ -1,0 +1,20 @@
+{
+  "name": "Implement ready-for-agent issues",
+  "description": "An issue labeled ready-for-agent is implemented test-first in a worktree, gated, opened as a PR and reviewed. Never merges. SDLC.md § Repo automations.",
+  "kind": "github",
+  "events": ["issue.labeled"],
+  "intervalSeconds": 600,
+  "filters": {
+    "changedLabels": ["ready-for-agent"],
+    "excludeLabels": ["in-progress", "ready-for-human", "needs-info", "blocked", "do-not-merge", "risk-high", "security"],
+    "maxRecords": 2,
+    "lookbackDays": 7
+  },
+  "task": {
+    "prompt": "Implement issue #{{github.number}} ({{github.url}}).",
+    "workflow": "implement-ticket",
+    "worktree": true,
+    "autonomous": true,
+    "generateFollowups": false
+  }
+}

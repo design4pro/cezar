@@ -1,0 +1,20 @@
+{
+  "name": "Triage new issues",
+  "description": "Brief every new issue, or one moved back to needs-triage, and set exactly one intake label. SDLC.md § Intake labels.",
+  "kind": "github",
+  "events": ["issue.opened", "issue.labeled"],
+  "intervalSeconds": 600,
+  "filters": {
+    "changedLabels": ["needs-triage"],
+    "excludeLabels": ["in-progress", "do-not-close", "blocked", "needs-info", "ready-for-agent", "ready-for-human"],
+    "maxRecords": 3,
+    "lookbackDays": 7
+  },
+  "task": {
+    "prompt": "Triage issue #{{github.number}} ({{github.url}}).",
+    "workflow": "triage",
+    "worktree": true,
+    "autonomous": true,
+    "generateFollowups": false
+  }
+}
