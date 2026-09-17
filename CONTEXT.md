@@ -185,6 +185,14 @@ An issue that is one tracer-bullet slice of a spec: narrow, but complete on its 
 **Frontier**:
 The tickets whose blockers are all closed.
 
+**Ladder**:
+An ordered set of labels an issue climbs on its way to a pull request, and the automations that answer them. The **intake ladder** is the pipeline's own — `needs-triage` to `ready-for-agent` to an implementing run — and a **trigger label** is the parallel lever a human pulls instead. Say which ladder.
+_Avoid_: pipeline (for this), track, funnel
+
+**Bridge**:
+The one edge that makes the intake ladder self-feeding: a groom that ends `READY_STATUS=ready` applies `needs-triage` as its last mutation, so nothing waits for a person to label a ready issue. Designed in `.ai/specs/2026-09-17-afk-intake-bridge.md`; not yet wired in any repository.
+_Avoid_: hook, glue, handoff (that word is already taken)
+
 ### Words with more than one meaning
 
 - **review**: the review gate, a `review` dispatch kind, a GitHub PR review, or the `review` pipeline label. Always qualify it.
