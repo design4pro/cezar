@@ -35,3 +35,8 @@ skills-lock.json
 
 # mock-agent output from dry-run e2e (scripts/mock-claude.mjs appends here)
 /notes.md
+
+# `3/` - a gh state directory that appears when HOME resolves to `3`, which a stray shell
+# redirect can do. It was committed here once, in a commit called "msg": `git add -A` does not
+# make a path like this look like a mistake. Editor swap files are handled separately.
+3/
