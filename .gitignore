@@ -3,12 +3,17 @@ dist/
 *.tsbuildinfo
 .idea
 
+# vim swap files. `.swp` is only the first one: vim rotates to `.swo`, `.swn` and down when
+# the file is already open elsewhere, which is exactly the case that leaves one behind here.
+*.sw[a-p]
+
 # Build artifact: the one README lives at the repo root and is copied into the published
 # package by packages/cezar/scripts/sync-readme.mjs. Never edit the copy.
 /packages/cezar/README.md
 
-# cezar runtime state in this repo (runs, worktrees, launch-key)
-.ai/cezar/
+# cezar runtime state in this repo (runs, worktrees, launch-key); its workflows are committed
+.ai/cezar/*
+!.ai/cezar/workflows/
 
 # locally installed agent skills (per-machine installs, not repo content)
 .agents/
@@ -30,3 +35,8 @@ skills-lock.json
 
 # mock-agent output from dry-run e2e (scripts/mock-claude.mjs appends here)
 /notes.md
+
+# `3/` - a gh state directory that appears when HOME resolves to `3`, which a stray shell
+# redirect can do. It was committed here once, in a commit called "msg": `git add -A` does not
+# make a path like this look like a mistake. Editor swap files are handled separately.
+3/

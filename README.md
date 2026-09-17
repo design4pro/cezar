@@ -9,12 +9,48 @@
   <a href="https://github.com/open-mercato/cezar/issues">Issues</a>
 </h4>
 
-<div align="center">
-  <h2>
-    Run coding agents in parallel, right in your repo.<br />
-    Local, zero config, no accounts.
-  </h2>
-</div>
+- 👀 **No visibility into a running agent.** A headless `claude` run is a black box
+  until it finishes. cezar streams every step — agent text, each tool call and
+  its result, tokens and cost per step — live, and keeps the full replay.
+- 🧩 **One agent, one working tree, one thing at a time.** Kick off a second task and
+  it fights the first over your files. cezar runs each task in its **own git
+  worktree**, so two (or three) agents work in parallel without stepping on
+  each other — or on the branch you're editing.
+- 🗂️ **A backlog that needs babysitting.** Queue a stack of tasks and cezar
+  **orchestrates** them: it runs up to your parallel limit and holds the rest in
+  an ordered queue. Point it at a GitHub issue and it runs straight on that, so
+  working the tracker down stops being a manual chore. Turn on the opt-in
+  **Inbox** (`CEZ_FOLLOWUPS=1`) and an agent's leftover follow-ups become the
+  next tasks too — one click each.
+- 🤖 **"Autonomous" means you still have to sit there.** Flip the **Autonomous**
+  flag and a run never parks to ask — it keeps going until the task is done, and it
+  always skips the review gate below. Pair it with a **skill** (a Markdown playbook)
+  and you've got fire-and-forget automation: hand off "fix this", "upgrade that",
+  "triage these" and walk away.
+- ✅ **The agent finishes and you have to trust it.** Nothing ever auto-merges — the
+  work rests on the task's own branch until you act on it. Switch on the optional
+  **review gate** (Settings → Agents, or `CEZ_REVIEW_GATE=1`; off by default) and a
+  non-autonomous run with changes parks at `review` instead of finishing: inspect the
+  diff, send notes back into the same session, or push a **draft PR**.
+- ♻️ **Losing a session when it fails.** Every run records its `claude` session id.
+  Take it over interactively in one click (`claude --resume <id>`), or continue it
+  in-process from the cockpit.
+- 🔀 **Locked into one agent vendor.** Most tools wed you to a single CLI. cezar
+  drives **Claude Code, Codex and OpenCode (experimental)** through one runner seam — set a
+  default, pick a backend per task, or mix them inside one workflow (implement
+  with one agent, review with another) — and through **OpenCode** you can point
+  a run at **open-source or local models**, not just the big vendors. See
+  [Agent backends](#coding-agent-backends).
+- 🖥️ **Close the laptop and the work stops.** A local agent only runs while your
+  machine is on and awake. Put cezar on a **VPS, cloud box, or dedicated server**
+  and the cockpit becomes the GUI for an **always-on AI coding team** — kick off,
+  watch and steer tasks from your laptop or **phone**, on the train or between
+  meetings, while the agents keep grinding through the backlog back on the server.
+- ⚡ **Setup tax.** No wizard, no env vars, no schema. Skills are Markdown, workflows
+  are short YAML, and everything degrades: no `gh` → works without PRs, no network
+  → local skills still load, no `.ai/skills` → the bare prompt still runs.
+
+---
 
 <p align="center">
   <a href="LICENSE">

@@ -1,0 +1,13 @@
+{
+  "name": "Weekly lessons",
+  "description": "Fridays: turn mistakes repeated across the last 14 days of PRs into enforced rules, at most one PR.",
+  "kind": "schedule",
+  "schedule": { "type": "weekly", "day": 5, "hour": 16, "minute": 0 },
+  "task": {
+    "prompt": "Run the afk-lessons skill for {{project}} on {{date}}.",
+    "workflow": "lessons",
+    "worktree": true,
+    "autonomous": true,
+    "generateFollowups": false
+  }
+}

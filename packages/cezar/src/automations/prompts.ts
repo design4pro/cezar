@@ -39,7 +39,8 @@ A GitHub poll:
     "excludeLabels": ["wontfix"],                    //   must carry none of these
     "changedLabels": ["needs-agent"],                //   REQUIRED for issue.labeled / issue.unlabeled: the label whose change fires it
     "lookbackDays": 7,                               //   1-90 (default 7): how far back one poll looks
-    "maxRecords": 25                                 //   1-100 (default 25): the most candidates one poll considers
+    "maxRecords": 25,                                //   1-100 (default 25): the most candidates one poll considers
+    "includePullRequests": true                      //   issue.labeled / issue.unlabeled on pull requests too (default false)
   },
   "task": {                                          // the ordinary cezar task each match launches
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",

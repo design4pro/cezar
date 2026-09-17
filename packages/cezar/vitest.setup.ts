@@ -3,6 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeEach } from 'vitest'
 
+import { scrubInheritedRunState } from './vitest.inherited-run-state.ts'
+
+// Nothing in this suite may write to the handoff journal or the follow-ups file of the
+// live cezar task it happens to be running inside — see the module for the leak, and for
+// why this is applied exactly once, here, rather than around every test.
+scrubInheritedRunState(process.env)
+
 // Nothing in this suite may write to the developer's own `~/.cezar`. Most cases pin
 // `CEZ_HOME` themselves, but the pin is one global for the whole worker and their
 // `afterEach` deletes it — so a write that outlives its test (a timeout is enough)

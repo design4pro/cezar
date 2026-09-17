@@ -10,6 +10,16 @@ How to review a diff in this repository. Applies to humans and to the `om-code-r
 4. **Security of the local server** — it binds to `127.0.0.1`, but it executes agents with file access; treat every request body as hostile.
 5. **Simplicity** — "every module is meant to be read in one sitting." Push back on new dependencies or abstractions the change doesn't need; browser dependencies must justify their bundle and maintenance cost.
 
+## Two axes
+
+Judge every diff on two separate axes and report them in separate sections, so a clean diff that builds the wrong thing cannot hide behind good code:
+
+- **Standards**: does it follow this file, `AGENTS.md`, the domain language in `CONTEXT.md` and the decisions in `docs/adr/`? A term `CONTEXT.md` lists under _Avoid_ is a minor finding. Contradicting an accepted ADR without a superseding one is a major finding.
+- **Spec**: does it do what the originating Agent Brief, ticket or spec asked? Check each acceptance criterion one by one:
+  - a missing criterion is a major finding;
+  - scope beyond the brief's "Out of scope" is minor, or major when it touches a `risk-high` area (`SDLC.md`);
+  - a decision the brief left open with no Resolved assumptions row is minor.
+
 ## Checklist
 
 ### TypeScript strictness
