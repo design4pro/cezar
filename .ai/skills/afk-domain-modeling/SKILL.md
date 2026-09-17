@@ -26,7 +26,7 @@ Do this in the same change that introduces or renames the concept, never as a la
 
 - An entry is `**Term**:` + one or two sentences defining what it IS + an optional `_Avoid_: synonym, synonym` line.
 - Only terms specific to cezar belong in the glossary. General programming concepts (timeout, cache, retry) do not.
-- Be opinionated. When two words name one concept, pick the one the contract schemas (`packages/contract/src/`) use, and list the other under `_Avoid_`.
+- Be opinionated. When two words name one concept, pick the one used by the contract schemas (`packages/contract/src/`), and list the other under `_Avoid_`.
 - Check the code before defining. If the code and the issue disagree about what a term means, the code wins; note the disagreement in the PR body.
 - Group entries under `###` subheadings once a cluster forms.
 
