@@ -1,10 +1,11 @@
 {
   "name": "Triage new issues",
-  "description": "Brief every new issue, or one moved back to needs-triage, and set exactly one intake label. SDLC.md § Intake labels.",
+  "description": "Brief every new issue, or one moved back to needs-triage, and set exactly one intake label. SDLC.md § Intake labels. `authors` is the gate: this repository is public and the run holds Bash with no allowlist, so an issue from anyone else is never triaged automatically. The gate matches the issue's author, not the labeller, so adding `needs-triage` to an outside issue does not trigger a run either - triage that one by hand.",
   "kind": "github",
   "events": ["issue.opened", "issue.labeled"],
   "intervalSeconds": 600,
   "filters": {
+    "authors": ["rafalwolak"],
     "changedLabels": ["needs-triage"],
     "excludeLabels": ["in-progress", "do-not-close", "blocked", "needs-info", "ready-for-agent", "ready-for-human"],
     "maxRecords": 25,
