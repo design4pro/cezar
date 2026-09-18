@@ -4,7 +4,7 @@
 
 This file documents how work flows from ticket to merged PR in this repository. The agent skills configured in `.ai/agentic.config.json` enforce the process; humans read it here. Issues and PRs live in GitHub, with every tracker operation the skills run defined in `.ai/trackers/github.md` (edit that file to extend or override tracker behavior).
 
-Sections 1 to 17 are shared, word for word, with the sibling repositories that run this pipeline; `## This repository` at the end is the only section that differs. So this document never names the base branch, the merge mechanics, or the automations by hand: **the base branch is `.ai/agentic.config.json` → `baseBranch`, and it is named once, in `## This repository`.** Everything below that says "the base branch" means that value.
+Everything above the `BEGIN per-repo` marker near the end of this file is shared, word for word, with the sibling repositories that run this pipeline; `## This repository`, below that marker, is the only section that differs. So this document never names the base branch, the merge mechanics, or the automations by hand: **the base branch is `.ai/agentic.config.json` → `baseBranch`, and it is named once, in `## This repository`.** Everything below that says "the base branch" means that value.
 
 Work enters through two paths: a free-form task brief handed to an agent, or a filed ticket. Both converge on the same review loop, the same validation gate, and the same merge gates.
 
@@ -227,9 +227,10 @@ The intake and trigger labels must exist first (`gh label create <label>`). To s
 
 This document and `.ai/agentic.config.json` describe the same process: change them together, and re-run the `om-setup-agent-pipeline` skill when the toolchain or label taxonomy changes. Per-skill deviations — extra review rules, a different PR body template, an added gate step — belong in a repo-local skill of the same name at `.ai/skills/<skill-name>/SKILL.md`, which takes precedence over the installed skill (and can `@`-import or reference it to extend rather than replace it); local rules win, but a repo-local skill cannot grant what the installed skill's safety rules forbid.
 
-Two amendment rules are specific to this document's shape:
+Three amendment rules are specific to this document's shape:
 
-- **A change to sections 1 to 17 is a change to every repository that shares them.** Make it in all of them, or make it in `## This repository` instead. `diff` between two repositories' files, truncated at `<!-- BEGIN per-repo -->`, must be empty.
+- **A change above the `BEGIN per-repo` marker is a change to every repository that shares this document.** Make it in all of them, or make it in `## This repository` instead. `diff` between two repositories' files, truncated at that marker, must be empty. The marker is the boundary — never a section count, which goes stale the first time a section is added, and was wrong here for as long as it was written down. Name the marker in prose the way this bullet does, without its comment syntax: a second literal copy of it above the real one is a false cut point, and truncating there silently drops every line between the two.
+- **A shared section may not point at a repo-relative path that is missing from any repository sharing it.** A bare path reads as "here", so a reader who follows it in a sibling finds nothing — that is how the intake-bridge spec, which exists in one of the three, came to be cited as though it were local in all of them. Name the repository that holds it, the way `## Intake labels` does, or move the sentence into `## This repository`. This binds a path a reader is sent to follow, not one named as an output the process writes or as a place that must _not_ repeat something.
 - **This file deliberately diverges from the `om-setup-agent-pipeline` SDLC template** by naming the base branch, the merge mechanics, the QA routing and the automations once, in `## This repository`, instead of rendering them throughout. Re-running that skill must not push those values back into the shared sections.
 
 <!-- BEGIN per-repo -->
