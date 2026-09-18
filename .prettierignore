@@ -5,6 +5,7 @@
 # .ai/trackers/github.md divergence, before the kit existed.
 .ai/agent-kit.lock.json
 .ai/skills/afk-architecture-review/SKILL.md
+.ai/skills/afk-codebase-design/SKILL.md
 .ai/skills/afk-domain-modeling/SKILL.md
 .ai/skills/afk-lessons/SKILL.md
 .ai/skills/afk-to-tickets/SKILL.md

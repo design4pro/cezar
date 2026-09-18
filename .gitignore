@@ -11,9 +11,11 @@ dist/
 # package by packages/cezar/scripts/sync-readme.mjs. Never edit the copy.
 /packages/cezar/README.md
 
-# cezar runtime state in this repo (runs, worktrees, launch-key); its workflows are committed
+# cezar runtime state in this repo (runs, worktrees, launch-key); its workflows and skill
+# overrides are committed
 .ai/cezar/*
 !.ai/cezar/workflows/
+!.ai/cezar/skills/
 
 # locally installed agent skills (per-machine installs, not repo content)
 .agents/
