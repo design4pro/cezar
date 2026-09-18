@@ -9,9 +9,11 @@ description: Shared vocabulary and rules for designing deep modules in cezar - m
 
 Adapted from mattpocock/skills `codebase-design` for unattended runs. Use these words exactly in designs, briefs, review findings and PR bodies. Do not substitute "component", "service", "API" or "boundary".
 
+**This file is the shared half.** The vocabulary and the rules below are identical in every repository the kit renders into, because `afk-triage`, `afk-to-tickets` and `afk-architecture-review` all read this path for terms they name exactly. The other half - this repository's own house idiom, seam table, dependency examples, test layout and risk-high list - is at `.ai/cezar/skills/afk-codebase-design/SKILL.md`, which shadows this file by name in the cockpit's registry. Read both before designing anything.
+
 ## Vocabulary
 
-- **Module**: anything with an interface and an implementation, at any scale: a function, a file, a package, a runner.
+- **Module**: anything with an interface and an implementation, at any scale: a function, a file, a package, a whole subsystem.
 - **Interface**: everything a caller must know to use the module correctly: types, invariants, ordering, error modes, required state, performance. Not just the TypeScript signature.
 - **Implementation**: the code behind the interface.
 - **Depth**: behaviour a caller or test can exercise per unit of interface it must learn. Deep = small interface, lots of behaviour. Shallow = interface nearly as complex as what it hides.
@@ -26,27 +28,23 @@ Adapted from mattpocock/skills `codebase-design` for unattended runs. Use these 
 - **The interface is the test surface.** Tests cross the same seam callers do. Needing to test past the interface means the module is the wrong shape.
 - **One adapter is a hypothetical seam; two adapters are a real one.** Do not add a seam until something actually varies across it.
 - **Accept dependencies, return results.** Pass collaborators in and return values rather than mutating shared state, so the seam is testable.
-- **Replace, don't layer.** When you deepen a module, delete the shallow tests it makes redundant instead of keeping both.
+- **Replace, don't layer.** When you deepen a module, the shallow tests it makes redundant should go rather than sit beside the new ones - but propose the deletion, do not perform it. Removing a test is a human's call.
 
 ## Dependency categories (where to put the seam)
 
-| Category | Example in cezar | Test with |
-|---|---|---|
-| In-process | label taxonomy, workflow step validation | the real code |
-| Local, substitutable | `.ai/cezar/` state files, git worktrees | a temp directory |
-| Remote you own | the cockpit HTTP API | the zod contract in `packages/contract` + an in-process server |
-| True external | `gh`, `claude` / `codex` / `opencode` / `pi` CLIs | a fake at the runner seam or the tracker operation |
+Four categories, and what each is tested with. This repository's own examples for every row are in its override.
 
-## Seams cezar already has
-
-Build on these before inventing new ones:
-- The runner seam: `AgentRunner` / `AgentSession`, described in `AGENT_PROTOCOL.md`. Backend parity is enforced by `ui-parity.test.ts`.
-- The HTTP contract: zod schemas in `packages/contract`, validated at every boundary (`CODE_REVIEW.md`).
-- Tracker operations in `.ai/trackers/github.md`.
+| Category             | What it is                                     | Test with                                  |
+| -------------------- | ---------------------------------------------- | ------------------------------------------ |
+| In-process           | logic with no I/O of its own                    | the real code                              |
+| Local, substitutable | something on this machine: files, a local store | a temp directory or a small fake           |
+| Remote you own       | a service defined in this repository            | its own contract, plus an in-process server |
+| True external        | a third-party API or CLI                        | a fake at the seam, never the real thing   |
 
 ## Design it twice (risk-high interfaces only)
 
-Use this when a new or changed interface touches something SDLC.md marks `risk-high`: the runner seam, worktree handling, `.ai/cezar/` state formats, or the HTTP API.
+Use this when a new or changed interface touches something `SDLC.md` marks `risk-high`; the override names which interfaces those are here.
+
 1. Dispatch two child tasks with `cez task create`. Constrain one to the smallest possible interface and the other to the most common caller's convenience.
 2. Compare their designs on depth, locality and seam placement. Pick one, or a merge of both.
 3. Record the choice and the rejected design as a row in the Resolved assumptions table.

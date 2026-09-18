@@ -1,9 +1,13 @@
 {
-  "kitVersion": 42,
+  "kitVersion": 43,
   "projectId": "cezar",
   "rendered": {
     ".ai/skills/afk-architecture-review/SKILL.md": {
       "sha256": "47e2d6c454b5e337e69d3aa54bd258966bd6ab2aa826c1831d07fcd2b2a20e32",
+      "mode": "100644"
+    },
+    ".ai/skills/afk-codebase-design/SKILL.md": {
+      "sha256": "a91c6c10103a82ffad3b189903d8a87e174d41d342086187c9cf540c755856b6",
       "mode": "100644"
     },
     ".ai/skills/afk-domain-modeling/SKILL.md": {
