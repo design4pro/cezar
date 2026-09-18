@@ -41,8 +41,6 @@ Four categories, and what each is tested with. This repository's own examples fo
 | Remote you own       | a service defined in this repository            | its own contract, plus an in-process server |
 | True external        | a third-party API or CLI                        | a fake at the seam, never the real thing   |
 
-Build on these before inventing new ones.
-
 ## Design it twice (risk-high interfaces only)
 
 Use this when a new or changed interface touches something `SDLC.md` marks `risk-high`; the override names which interfaces those are here.
