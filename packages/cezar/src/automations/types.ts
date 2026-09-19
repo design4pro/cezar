@@ -27,6 +27,8 @@ export const automationFiltersSchema = z
     reviewers: stringList,
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
+    /** Label events on pull requests too, not only on issues. */
+    includePullRequests: z.boolean().optional(),
   })
   .passthrough();
 
@@ -146,6 +148,10 @@ export const automationRuntimeStateSchema = z
     baselineAt: z.string().datetime().optional(),
     cursor: automationCursorSchema.optional(),
     frozenHighWatermark: automationCursorSchema
+      .extend({ tieBreaker: z.string() })
+      .optional(),
+    /** The cursor a widening climb ran to the search ceiling at without advancing. */
+    widenExhaustedAt: automationCursorSchema
       .extend({ tieBreaker: z.string() })
       .optional(),
     backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),

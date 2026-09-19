@@ -72,12 +72,40 @@ export class ProjectAutomationScheduler {
       const overlapSince = since
         ? new Date(Date.parse(since) - 120_000).toISOString()
         : undefined;
-      const result = await githubRequests.run(() => github.poller.poll(
+      let result = await githubRequests.run(() => github.poller.poll(
         github.owner,
         github.repo,
         definition,
         { since: overlapSince },
       ));
+      // A truncated poll whose observations all sit in the 120 s overlap band hands back the
+      // cursor it was given, so the automation re-reads one window forever. Widen the budget of a
+      // poll that made no progress, doubling up to the search ceiling: poll() evaluates a
+      // contiguous prefix, so a wider budget only reaches further into the same run. A cursor the
+      // climb already failed at is not climbed again - up to 255 timeline reads a poll against a
+      // rate limit every run on the host shares - until the cursor moves.
+      let widenExhausted = sameCursor(state.widenExhaustedAt, state.cursor);
+      for (let budget = definition.filters.maxRecords; !widenExhausted
+        && mode === 'execute'
+        && state.cursor
+        && result.truncated
+        && laterCursor(state.cursor, result.cursor) === state.cursor;) {
+        // Ends when the budget stops growing, not at a particular number, so termination never
+        // depends on two literals agreeing.
+        const next = Math.min(budget * 2, 100);
+        if (next <= budget) {
+          widenExhausted = true;
+          break;
+        }
+        budget = next;
+        const widened = { ...definition, filters: { ...definition.filters, maxRecords: budget } };
+        result = await githubRequests.run(() => github.poller.poll(
+          github.owner,
+          github.repo,
+          widened,
+          { since: overlapSince },
+        ));
+      }
       const eligible = result.candidates.filter((candidate) => {
         if (state.baselineAt && candidate.timestamp <= state.baselineAt) return false;
         if (!state.cursor) return true;
@@ -96,6 +124,12 @@ export class ProjectAutomationScheduler {
             revision: definition.revision,
             cursor,
             frozenHighWatermark: result.truncated && cursor?.tieBreaker
+              ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
+              : undefined,
+            // Only while the cursor stayed put: `widenExhausted` is never reset, so on the poll
+            // that escapes a pin it is still true, and marking the new cursor would disable
+            // widening at a cursor nobody climbed.
+            widenExhaustedAt: widenExhausted && sameCursor(cursor, state.cursor) && cursor?.tieBreaker
               ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
               : undefined,
             lastSuccessAt: now,
@@ -192,8 +226,15 @@ function laterCursor(
   return order > 0 ? observed : current;
 }
 
-/** The shortest a failed item is ever pushed out; a poll interval is at least this anyway. */
 const MIN_RETRY_MS = 60_000;
+
+/** The shortest a failed item is ever pushed out; a poll interval is at least this anyway. */
+function sameCursor(
+  a: { timestamp: string; tieBreaker?: string } | undefined,
+  b: { timestamp: string; tieBreaker?: string } | undefined,
+): boolean {
+  return !!a && !!b && a.timestamp === b.timestamp && a.tieBreaker === b.tieBreaker;
+}
 
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;

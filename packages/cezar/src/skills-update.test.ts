@@ -109,6 +109,20 @@ describe('SkillsUpdateService', () => {
     expect(state.status).toBe('current'); expect(run).not.toHaveBeenCalled();
   });
 
+  it('neither checks nor updates when the host disables skills updates', async () => {
+    const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
+    const old = process.env.CEZ_SKILLS_AUTO_UPDATE; process.env.CEZ_SKILLS_AUTO_UPDATE = '0';
+    try {
+      const run = vi.fn();
+      const service = new SkillsUpdateService({ homeDir: home, run, resolveNpx: async () => 'npx' });
+      expect((await service.check(repo, true)).status).toBe('unavailable');
+      expect((await service.update(repo, true)).status).toBe('unavailable');
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      if (old === undefined) delete process.env.CEZ_SKILLS_AUTO_UPDATE; else process.env.CEZ_SKILLS_AUTO_UPDATE = old;
+    }
+  });
+
   it('recovers a dead cache lock and removes its own lock afterward', async () => {
     const { home, repo } = await fixture({ skills: { om: { source: 'open-mercato/skills' } } });
     const lockPath = join(home, '.cache', 'cez', 'skills-update.lock');

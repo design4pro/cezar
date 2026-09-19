@@ -260,7 +260,12 @@ export class AutomationStore {
 
   /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
   private isLeaseAbandoned(path: string, staleAfterMs: number): boolean {
-    if (this.now().getTime() - statSync(path).mtimeMs > staleAfterMs) return true;
+    // `Date.now()` is floored to the millisecond and `mtimeMs` is not, so a lock written
+    // microseconds ago reads as a NEGATIVE age about 98% of the time. Clamp it, and count a
+    // lock that is exactly as old as the window, so `staleAfterMs` really is the whole age
+    // rule: at 0 nothing is defended by age, at the ten-minute default nothing changes.
+    const ageMs = Math.max(0, this.now().getTime() - statSync(path).mtimeMs);
+    if (ageMs >= staleAfterMs) return true;
     const pid = readLeasePid(path);
     // An unreadable pid (an empty or half-written lock) leaves only the age rule above.
     if (pid === undefined || pid === process.pid) return false;

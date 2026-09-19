@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "baseBranch": "auto",
+  "baseBranch": "design4pro",
   "tracker": "github",
   "browser": {
     "provider": "agent-browser"
@@ -38,7 +38,8 @@
       "skip-qa",
       "qa-approved",
       "qa-self-verified",
-      "in-progress"
+      "in-progress",
+      "ci-monitoring"
     ],
     "priority": [
       "priority-low",
@@ -50,6 +51,16 @@
       "risk-low",
       "risk-medium",
       "risk-high"
+    ],
+    "intake": [
+      "needs-triage",
+      "needs-info",
+      "ready-for-agent",
+      "ready-for-human"
+    ],
+    "command": [],
+    "outside": [
+      "do-not-close"
     ]
   },
   "qaGate": true,
@@ -60,5 +71,5 @@
     "scripts": ".ai/scripts",
     "qa": ".ai/qa"
   },
-  "reviewChecklist": null
+  "reviewChecklist": "CODE_REVIEW.md"
 }

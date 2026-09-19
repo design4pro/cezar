@@ -40,7 +40,8 @@ A GitHub poll:
     "changedLabels": ["needs-agent"],                //   REQUIRED for issue.labeled / issue.unlabeled: the label whose change fires it
     "reviewers": ["octocat"],                        //   GitHub logins a review event must name — the reviewer for pull_request.reviewed, the requested one for the two review_requested events
     "lookbackDays": 7,                               //   1-90 (default 7): how far back one poll looks
-    "maxRecords": 25                                 //   1-100 (default 25): the most candidates one poll considers
+    "maxRecords": 25,                                //   1-100 (default 25): the most candidates one poll considers
+    "includePullRequests": true                      //   issue.labeled / issue.unlabeled on pull requests too (default false)
   },
   "task": {                                          // the ordinary cezar task each match launches
     "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
