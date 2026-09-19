@@ -135,19 +135,14 @@ export class GithubPoller {
     }
     if (labelEvents.length) {
       sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true, reviews: false });
+      // Pull requests get a source of their own rather than the 'mixed' family: 'mixed' emits no
+      // `is:` qualifier, and /search/issues rejects such a query with HTTP 422.
+      if (definition.filters.includePullRequests) {
+        sources.push({ family: 'prs', activity: 'updated', opened: false, labels: true, reviews: false });
+      }
     }
-      
-    // Pull requests get a source of their own rather than the 'mixed' family: 'mixed' emits no
-    // `is:` qualifier, and /search/issues rejects such a query with HTTP 422.
-    let _labels = false;
-    if (definition.filters.includePullRequests) {
-      _labels = true;
-    }
-      
     if (reviewEvents.length) {
-      sources.push({ family: 'prs', activity: 'updated', opened: false, labels: _labels, reviews: true });
-    } else {
-      sources.push({ family: 'prs', activity: 'updated', opened: false, labels: _labels });
+      sources.push({ family: 'prs', activity: 'updated', opened: false, labels: false, reviews: true });
     }
 
     const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
