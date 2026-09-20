@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The cezar cockpit: one per host, not one per project. A single `cez serve` on 4321 answers
+     /api/v1/p/<id>/runs for every repo in `cezar projects`, so this file is installed once no
+     matter how many repos run the protocol. That is why it lives in the kit rather than in an
+     application repository: a host-wide service is not one repo's property, and the copy that
+     used to sit in money-tracker.online was invisible to planned.travel, which had none at all.
+
+     This file is a template; the four placeholders it carries and the sed line that fills them
+     are in the kit README, "The host layer". They are deliberately not listed here: a renderer
+     substitutes them wherever they appear, comments included, so an instruction that names them
+     turns into nonsense the moment it is rendered.
+
+     Deliberately NOT `bash -lc`: a login shell sources ~/.profile, and cezar forwards GH_TOKEN,
+     ANTHROPIC_*, CLAUDE_* and CEZ_* from its own environment into every agent run, so a key
+     exported there would become a key in every run. The explicit PATH below is the whole
+     environment the cockpit gets, plus the two variables the automations need and
+     GH_CONFIG_DIR: the gh config directory holding the design4pro-agent login (a path, not a
+     token; docs/agents/cezar.md, Host identity). Cezar forwards it, so `gh` and `git push` in a
+     run act as the bot while the developer's own `gh` stays untouched. Anything else
+     (HUSKY=0 included) is dropped by cezar's allowlist before the agent starts: husky is kept
+     out of runs by `HUSKY=0` inline in each workflow's setup step and by the CEZ_TASK_ID check
+     in .husky/pre-commit, not by this file.
+
+     The program below is the design4pro/cezar fork (branch `design4pro`: an upstream release
+     plus the fixes this pipeline needs), linked onto PATH from its checkout by
+     `npm run install-as-command`, deliberately not `npx`. `npx` resolves upstream from a cache
+     npm may collect at any time, and upstream lacks the fork's `filters.includePullRequests`,
+     which "Resolve blocking review threads" needs - so running it presents as pull requests
+     sitting with unresolved threads and no error anywhere. The link follows the checkout: rebuild
+     there, then restart this service while it has no active runs.
+
+     Every variable below is set here and only here. Nothing inserts one into an installed plist
+     any more, so a plist installed before the fork is re-rendered from this file, not kept. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>dev.cezar.cockpit</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__CEZAR__</string>
+    <string>serve</string>
+    <string>--no-open</string>
+    <string>--port</string>
+    <string>4321</string>
+    <string>--repo</string>
+    <string>__REPO_ROOT__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>__PATH__</string>
+    <key>CEZ_AUTOMATIONS</key>
+    <string>1</string>
+    <key>CEZ_AUTONOMOUS_DEFAULT</key>
+    <string>0</string>
+    <!-- Skills auto-update: without this the coordinator runs `npx skills check` in every project
+         root at service start, which re-adds the skills from upstream HEAD and replaces the
+         vendored .claude/skills/om-* with symlinks into an untracked .agents/. The fork makes the
+         variable skip that check as well as the update; upstream gates only the update. -->
+    <key>CEZ_SKILLS_AUTO_UPDATE</key>
+    <string>0</string>
+    <key>GH_CONFIG_DIR</key>
+    <string>__HOME__/.config/gh-agent</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/cezar-cockpit.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/cezar-cockpit.log</string>
+</dict>
+</plist>
