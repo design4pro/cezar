@@ -35,6 +35,8 @@ export function isRunnerId(value: string): value is RunnerId {
 }
 
 export interface AgentRunSpec {
+  /** Explicit repository-relative write scope for permission preflight. */
+  writePaths?: string[];
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
   systemPrompt?: string;
   userPrompt: string;

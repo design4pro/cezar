@@ -21,6 +21,7 @@ describe('POST /runs and the dispatch intent', () => {
   let store: RunStore;
   let app: Hono;
   let inputs: StartRunInput[];
+  let targetConflict: string | undefined;
   const savedFlag = process.env.CEZ_DISPATCH;
 
   beforeEach(() => {
@@ -28,8 +29,10 @@ describe('POST /runs and the dispatch intent', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     inputs = [];
+    targetConflict = undefined;
     delete process.env.CEZ_DISPATCH;
     const manager = {
+      writeTargetConflict: () => targetConflict,
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         inputs.push(input);
         return store.createRun({ title: 't', workflow: 'quick-task', task: input.task, steps: [] });
@@ -52,6 +55,15 @@ describe('POST /runs and the dispatch intent', () => {
     const res = await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 'split this', dispatch: { maxSubtasks: 10, inFlight: 2, model: 'sonnet' } });
     expect(res.status).toBe(201);
     expect(inputs[0]?.dispatchIntent).toEqual({ maxSubtasks: 10, inFlight: 2, model: 'sonnet' });
+  });
+
+  it('passes declared ownership and write scope, and returns 409 without starting a conflicting run', async () => {
+    const body = { steps: [{ id: 'work', prompt: '{{task}}' }], task: 'fix', writeTarget: { repository: 'acme/demo', number: 671 }, writePaths: ['.claude/hooks/guard.sh'] };
+    expect((await post(body)).status).toBe(201);
+    expect(inputs[0]).toMatchObject({ writeTarget: body.writeTarget, writePaths: body.writePaths });
+    targetConflict = 'owned by run other';
+    expect((await post(body)).status).toBe(409);
+    expect(inputs).toHaveLength(1);
   });
 
   it('the bare toggle is an empty intent, and no toggle is no intent', async () => {

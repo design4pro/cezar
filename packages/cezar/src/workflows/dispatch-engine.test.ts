@@ -298,6 +298,47 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(record.id).some((n) => n.startsWith('worktree on'))).toBe(true);
     }, 40_000);
 
+    it('reserves an explicit target synchronously and permits only one delegated writer', () => {
+      const target = { repository: 'acme/demo', number: 668 };
+      const parent = store.createRun({ title: 'owner', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(parent.id, { status: 'running', writeTarget: target, dispatch: rootOf(parent.id) });
+      const child = dispatchOk(parent.id, order('mock:pause mock:done delegated fix'));
+      expect(store.getRun(child.id)?.writeTarget).toEqual(target);
+      expect(refusal(parent.id, order('duplicate', { writeTarget: target }))).toContain(child.id);
+      const other = store.createRun({ title: 'other', workflow: 'quick-task', task: 't', steps: [] });
+      store.updateRun(other.id, { status: 'running' });
+      expect(refusal(other.id, order('same target', { writeTarget: { ...target, repository: 'ACME/Demo' } }))).toContain('owned by run');
+      expect(() => manager.startRun(SINGLE_STEP, { task: 'another owner', writeTarget: target })).toThrow('owned by run');
+      store.updateRun(parent.id, { status: 'done' });
+      expect(manager.continueRun(parent.id, { text: 'resume' })).toMatchObject({ ok: false, error: expect.stringContaining(child.id) });
+    });
+
+    it('reacquires a released target atomically on manual continuation', async () => {
+      const target = { repository: 'acme/demo', number: 671 };
+      const finished = () => {
+        const run = store.createRun({ title: 'finished', workflow: 'quick-task', task: 'mock:done', steps: [{ id: 'task', name: 'task', kind: 'agent' }] });
+        store.updateRun(run.id, { status: 'done', writeTarget: target });
+        store.updateStep(run.id, 'task', { sessionId: 'test-session' });
+        return run;
+      };
+      const first = finished();
+      started.push(first.id);
+      const second = finished();
+      started.push(second.id);
+      expect(manager.continueRun(first.id, { text: 'mock:pause mock:done resume' })).toEqual({ ok: true });
+      expect(manager.continueRun(second.id, { text: 'also resume' })).toMatchObject({ ok: false, error: expect.stringContaining(first.id) });
+      expect(() => manager.startVariants(SINGLE_STEP, { task: 'parallel writers', writeTarget: { ...target, number: 672 } }, 2)).toThrow('one owner');
+      await waitFor(first.id, (run) => run?.status === 'running');
+    });
+
+    it('preflights declared protected writes before an autonomous agent can start', async () => {
+      const run = manager.startRun(SINGLE_STEP, { task: 'mock:done change configuration', autonomous: true, writePaths: ['.claude/settings.json'] });
+      await waitFor(run.id, settled);
+      expect(store.getRun(run.id)?.status).toBe('failed');
+      expect(store.getRun(run.id)?.error).toContain('Permission preflight');
+      expect(notes(run.id).some((note) => note.includes('autonomous — continuing'))).toBe(false);
+    }, 40_000);
+
     it('refuses against a settled parent and while the feature is off', async () => {
       const parent = store.createRun({ title: 'done', workflow: 'quick-task', task: 't', steps: [] });
       store.updateRun(parent.id, { status: 'done', dispatch: rootOf(parent.id) });
@@ -364,9 +405,12 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       await waitFor(parent.id, settled);
       const child = start('mock:done take the right flank', childOf(parent.id));
       await waitFor(child.id, settled);
-      // Rung 4 of the delivery ladder: a finished parent is continued with the report.
-      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from task'), 40_000);
-      const text = delivered(stdinFile, 'Report from task');
+      expect(store.getRun(parent.id)?.status).toBe('done');
+      expect(store.getRun(parent.id)?.dispatch?.pendingReports).toHaveLength(1);
+      expect(stdin(stdinFile)).not.toContain('Report from task');
+      expect(manager.continueRun(parent.id, { text: 'Read the pending report.' })).toEqual({ ok: true });
+      await waitFor(parent.id, () => stdin(stdinFile).includes('## Reports from your dispatched tasks'), 40_000);
+      const text = delivered(stdinFile, '## Reports from your dispatched tasks');
       expect(text).toContain(child.id);
     }, 60_000);
 

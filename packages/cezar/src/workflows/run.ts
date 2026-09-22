@@ -55,7 +55,7 @@ import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/stor
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
-import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch, WriteTarget } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import {
@@ -518,6 +518,8 @@ function formatWakeInstant(at: Date): string {
 }
 
 export interface StartRunInput {
+  writeTarget?: WriteTarget;
+  writePaths?: string[];
   task: string;
   model?: string;
   /** Agent backend chosen for this task (GUI). Unset = the config default. */
@@ -1142,11 +1144,25 @@ export class RunManager {
     };
   }
 
+  /** Synchronous with create/update: no await may split checking and reserving a target. */
+  writeTargetConflict(target: WriteTarget | undefined, except?: string, delegatedBy?: string): string | undefined {
+    if (!target) return undefined;
+    const ancestors = new Set<string>();
+    for (let id = delegatedBy; id && !ancestors.has(id); id = this.store.getRun(id)?.dispatch?.parentRunId) ancestors.add(id);
+    const owner = this.store.listRuns().find((run) => run.id !== except && !ancestors.has(run.id)
+      && !isTerminalStatus(run.status)
+      && run.writeTarget?.repository.toLowerCase() === target.repository.toLowerCase()
+      && run.writeTarget.number === target.number);
+    return owner ? `write target ${target.repository}#${target.number} is owned by run ${owner.id}` : undefined;
+  }
+
   startRun(
     workflow: WorkflowDef,
     input: StartRunInput,
     group?: { groupId: string; variant: string },
   ): RunRecord {
+    const conflict = this.writeTargetConflict(input.writeTarget, undefined, input.dispatch?.parentRunId);
+    if (conflict) throw new Error(conflict);
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
     const effectiveInput = {
@@ -1190,6 +1206,8 @@ export class RunManager {
     // holding it on the input — is what makes it survive: `execute()`, restart recovery and the
     // turn-end handlers all read the RECORD, and a tree whose root lost its `dispatch` on a
     // restart would be a tree with no root.
+    if (input.writeTarget) this.store.updateRun(run.id, { writeTarget: input.writeTarget });
+    if (input.writePaths) this.store.updateRun(run.id, { writePaths: input.writePaths });
     if (input.dispatch) this.store.updateRun(run.id, { dispatch: input.dispatch });
     else if (input.dispatchIntent) this.store.updateRun(run.id, { dispatch: { rootRunId: run.id, intent: input.dispatchIntent } });
     // Initial pasted attachments must be visible while the run is still queued (#612),
@@ -1231,6 +1249,7 @@ export class RunManager {
    * applies — with maxParallel=2 a third variant simply waits.
    */
   startVariants(workflow: WorkflowDef, input: StartRunInput, count: number): RunRecord[] {
+    if (input.writeTarget && count > 1) throw new Error('a write target requires one owner; parallel variants are not allowed');
     const groupId = randomUUID();
     return VARIANT_LETTERS.slice(0, Math.min(Math.max(count, 1), VARIANT_LETTERS.length)).map(
       (variant) => {
@@ -1983,6 +2002,9 @@ export class RunManager {
     const note = (message: string, tone?: 'danger') =>
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
+    const writeTarget = input.writeTarget ?? parent.writeTarget;
+    const conflict = this.writeTargetConflict(writeTarget, undefined, parentId);
+    if (conflict) return { refused: conflict };
     const runs = this.store.listRuns();
     // The user's limits, when the root was started with the composer's Dispatch toggle: they may
     // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
@@ -2032,7 +2054,9 @@ export class RunManager {
     const record = this.startRun(workflow, {
       // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
       // mints it, so the envelope is finished below once it exists.
-      task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
+      writeTarget,
+      writePaths: input.writePaths,
+      task: childTaskEnvelope({ ...input, writeTarget }, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
       runner: input.runner ?? intent?.runner ?? parent.runner,
       ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
@@ -2132,8 +2156,8 @@ export class RunManager {
    * never reach it: the queued cancel, the restart settle).
    *
    * The report is PERSISTED first and always, then delivered down a ladder of four rungs — an
-   * open session, a still-queued prompt stack, the starting-up buffer, and finally a fresh
-   * continuation for a parent that has already finished.
+   * open session, a still-queued prompt stack, or the starting-up buffer. A terminal parent keeps
+   * the report for an explicit human continuation; a child cannot reacquire released ownership.
    */
   private reportSettledChildToParent(runId: string): void {
     try {
@@ -2183,6 +2207,9 @@ export class RunManager {
         message: `report received from task "${child.title}" (${child.id}) — status ${report.status}`,
       });
 
+      // A terminal parent has released its ownership. A child report is not permission to resume.
+      if (isTerminalStatus(parent.status)) return;
+
       // A CANCELLED child is persisted and nothing more: a cancel cascades children-first, so the
       // parent is already cancelled — or about to be — and every live rung below would fight that.
       if (child.status === 'cancelled') return;
@@ -2199,11 +2226,7 @@ export class RunManager {
         return;
       }
       if (this.deferMessage(parentId, blocks)) return;
-      // `cancelled` is deliberately NOT continuable from a child's report: nothing a child says may
-      // restart a task a human cancelled.
-      if (['done', 'failed', 'review'].includes(parent.status)) {
-        this.continueRun(parentId, { text }, true);
-      }
+
     } catch {
       // A terminal transition must never fail over its bookkeeping. The pending report is already
       // on the record by the time anything below it can throw, so the parent still learns.
@@ -2237,7 +2260,7 @@ export class RunManager {
   private scheduleAutoResumeIfLimited(runId: string): void {
     if (this.autoResumeTimers.has(runId)) return; // already promised
     const run = this.store.getRun(runId);
-    if (!run || run.status !== 'failed') return;
+    if (!run || run.status !== 'failed' || run.writeTarget) return;
     // Archiving IS resigning from a task. Reviving one because a window happened to reopen would
     // be the feature working against the clearest signal the user can give it.
     if (run.archived) return;
@@ -2278,7 +2301,7 @@ export class RunManager {
   private fireAutoResume(runId: string): void {
     this.autoResumeTimers.delete(runId);
     const run = this.store.getRun(runId);
-    if (!run || run.status !== 'failed' || !run.autoResumeAt) return;
+    if (!run || run.status !== 'failed' || !run.autoResumeAt || run.writeTarget) return;
     // Belt and braces against the one gap `reconcileAutoResumes` cannot close: the setting going
     // off in the window between the last pump and this tick.
     if (!this.semaphore.autoResumeOnUsageLimit()) {
@@ -3052,7 +3075,7 @@ export class RunManager {
    * bookkeeping without masquerading as user-authored transcript messages. */
   private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
-    if (!state?.session?.open || state.cancelled) return false;
+    if (!state?.session?.open || state.cancelled || isTerminalStatus(this.store.getRun(runId)?.status ?? 'cancelled')) return false;
     // A parked in-place run gave the working-tree lease back (`parkRepoRoot`). It must own the
     // tree again before its session resumes, and the lease is asynchronous — so the message is
     // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
@@ -3182,6 +3205,8 @@ export class RunManager {
     if (this.active.has(runId)) return { ok: false, error: 'run is still active' };
     const run = this.store.getRun(runId);
     if (!run) return { ok: false, error: 'not found' };
+    const conflict = this.writeTargetConflict(run.writeTarget, runId);
+    if (conflict) return { ok: false, error: conflict };
     // `review` is continuable too — that's the "Send back" path (spec 009).
     if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
@@ -3258,6 +3283,8 @@ export class RunManager {
     // bound UNATTENDED resumes.
     this.clearAutoResume(runId);
 
+    // Reserve synchronously before asynchronous startup, so a second dispatch cannot race resume.
+    if (run.writeTarget) this.store.updateRun(runId, { status: 'queued' });
     const continuations = run.steps.filter((s) => s.id.startsWith('continue-')).length;
     const stepId = `continue-${continuations + 1}`;
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
@@ -3663,6 +3690,7 @@ export class RunManager {
       : openingPrompt;
     const session = runner.startSession(
       {
+        writePaths: record?.writePaths,
         // The Continue step is a fresh agent session on the same run — the
         // run's extra system prompt (already resolved at execute time and
         // echoed on the record) rides along with the handoff contract, and a
@@ -4452,6 +4480,7 @@ export class RunManager {
     try {
       session = runner.startSession(
         {
+          writePaths: this.store.getRun(runId)?.writePaths,
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
           // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
           // — how a task creates a GitHub automation), then the run's extra

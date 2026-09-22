@@ -47,7 +47,7 @@ import {
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
-import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema, writeTargetSchema, writePathsSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -659,6 +659,8 @@ const startRunSchema = z
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
+    writeTarget: writeTargetSchema.optional(),
+    writePaths: writePathsSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -3886,6 +3888,8 @@ export function createApp(deps: ServerDeps) {
       const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
+        writeTarget: parsed.data.writeTarget,
+        writePaths: parsed.data.writePaths,
         model: parsed.data.model,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
@@ -3901,6 +3905,11 @@ export function createApp(deps: ServerDeps) {
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
+      if (input.writeTarget) {
+        const conflict = manager.writeTargetConflict(input.writeTarget);
+        if (conflict) return c.json({ error: conflict }, 409);
+        if (variants > 1) return c.json({ error: 'a write target requires one owner; parallel variants are not allowed' }, 409);
+      }
       if (variants > 1) {
         const runs = manager.startVariants(workflow, input, variants);
         // The entry points at the first variant — the thread the composer navigates to.

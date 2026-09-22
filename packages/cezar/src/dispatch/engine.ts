@@ -104,6 +104,8 @@ export function childTaskEnvelope(
     lines.push('- Kind: review — you review the work named below and give a verdict; you do not implement it');
   }
   if (child.review_of?.length) lines.push(`- Review of: ${child.review_of.join(', ')}`);
+  if (child.writeTarget) lines.push(`- Write target: ${child.writeTarget.repository}#${child.writeTarget.number} (delegated ownership; do not mutate another target)`);
+  if (child.writePaths?.length) lines.push(`- Declared write paths: ${child.writePaths.join(', ')}`);
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
   if (child.allowed_tools?.length) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ')}`);
   if (child.max_cost !== undefined) lines.push(`- Max cost: ${usd(child.max_cost)}`);
