@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Keeps the runner pool at its declared size. launchd keeps this script alive; this script keeps
-# the containers alive; `--restart=always` and `--ephemeral` between them recycle a container after
-# every single job. Three layers, each with one responsibility.
-#
-# It reconciles rather than creates: a container that already exists and runs is left alone, so
-# running this by hand at any moment is safe and is the intended way to apply a size change.
+# Reconcile disposable single-job containers. Never restart a writable layer or stop an active job.
+# The organization credential stays on the host; containers receive only a registration token.
 set -euo pipefail
 
 IMAGE="${GHA_RUNNER_IMAGE:-gha-runner:local}"
@@ -31,49 +27,67 @@ AGENT_MEMORY="${GHA_RUNNER_AGENT_MEMORY:-4g}"
 
 log() { printf '%s pool: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
+registration_token() {
+  # Keep the organization credential out of argv, container metadata and logs.
+  printf 'header = "Authorization: Bearer %s"\n' "$(cat "$TOKEN_FILE")" |
+    curl --config - --fail --silent --show-error --max-time 30 -X POST \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      "https://api.github.com/orgs/${ORG}/actions/runners/registration-token" |
+    jq -er '.token | select(type == "string" and length > 0)'
+}
+
 ensure() {
-  local name="$1" labels="$2" cpus="$3" memory="$4"; shift 4
-  local limits=(--cpus "$cpus" --memory "$memory" --memory-swap "$memory")
-  # `docker inspect` is the check rather than `docker ps`, because a container that exited between
-  # jobs is restarting, not missing, and recreating it would race the restart.
-  if docker inspect --type container "$name" >/dev/null 2>&1; then
-    # A restart reuses the container's original flags, so limits reach an existing container only
-    # through `docker update` - which keeps a limit change on the same path as a size change.
-    docker update "${limits[@]}" "$name" >/dev/null || log "could not apply limits to $name"
-    return 0
-  fi
-  log "creating $name [$labels]"
+  local name="$1" labels="$2" cpus="$3" memory="$4"
+  local state token
+  state="$(docker inspect --type container --format '{{.State.Status}}' "$name" 2>/dev/null)" || state=missing
+  case "$state" in
+    running|paused|restarting)
+      # Migration from the old pool must not interrupt a running job. Only change restart policy;
+      # resource/image changes take effect on its replacement, never midway through a job.
+      docker update --restart=no "$name" >/dev/null || return 1
+      return 0 ;;
+    exited|dead|created)
+      # No --force: a concurrent start is a safe failure, never permission to kill a job.
+      docker rm "$name" >/dev/null || return 1 ;;
+    missing) ;;
+    *) log "unknown state for $name; leaving it alone"; return 1 ;;
+  esac
+  token="$(registration_token)" || { log "registration failed for $name; retrying next cycle"; return 1; }
+  log "creating $name [$labels] from $IMAGE_ID"
   docker run --detach \
     --name "$name" \
-    --restart always \
+    --restart=no \
     --hostname "$name" \
+    --cpus "$cpus" --memory "$memory" --memory-swap "$memory" \
     --env "RUNNER_ORG=$ORG" \
     --env "RUNNER_NAME=$name" \
     --env "RUNNER_LABELS=$labels" \
     --env "RUNNER_GROUP=$GROUP" \
-    --volume "$TOKEN_FILE:/run/secrets/gha-token:ro" \
-    "$@" \
-    "$IMAGE" >/dev/null
+    --env "RUNNER_REGISTRATION_TOKEN=$token" \
+    "$IMAGE_ID" >/dev/null
 }
 
-[ -r "$TOKEN_FILE" ] || { log "cannot read $TOKEN_FILE - see README, 'The runner pool'"; exit 1; }
+main() {
+  [ -r "$TOKEN_FILE" ] || { log "cannot read runner token file"; return 1; }
+  while :; do
+    if docker info >/dev/null 2>&1; then
+      # Resolve the mutable tag once per cycle; each new container is pinned to that immutable ID.
+      if IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE")"; then
+        for ((i=1; i<=CI_COUNT; i++)); do
+          ensure "gha-ci-$i" "self-hosted,linux,ARM64,ci" "$CI_CPUS" "$CI_MEMORY" || log "retrying gha-ci-$i next cycle"
+        done
+        for ((i=1; i<=AGENT_COUNT; i++)); do
+          ensure "gha-agent-$i" "self-hosted,linux,ARM64,agent" "$AGENT_CPUS" "$AGENT_MEMORY" || log "retrying gha-agent-$i next cycle"
+        done
+      else
+        log "runner image unavailable; retrying next cycle"
+      fi
+    else
+      log "docker unreachable; retrying in ${INTERVAL}s"
+    fi
+    sleep "$INTERVAL"
+  done
+}
 
-while :; do
-  if docker info >/dev/null 2>&1; then
-    # The ci pool carries warm caches; the agent pool deliberately carries none. What survives a CI
-    # job here is a content-addressed package store consumed under --frozen-lockfile and a Node
-    # tarball cache - not a workspace. The browsers are not a volume: they are baked into the image
-    # at /ms-playwright, so there is nothing for a job to poison and nothing to restore.
-    for i in $(seq 1 "$CI_COUNT"); do
-      ensure "gha-ci-$i" "self-hosted,linux,ARM64,ci" "$CI_CPUS" "$CI_MEMORY" \
-        --volume gha-pnpm-store:/home/runner/.local/share/pnpm/store \
-        --volume gha-toolcache:/opt/hostedtoolcache
-    done
-    for i in $(seq 1 "$AGENT_COUNT"); do
-      ensure "gha-agent-$i" "self-hosted,linux,ARM64,agent" "$AGENT_CPUS" "$AGENT_MEMORY"
-    done
-  else
-    log "docker unreachable - is OrbStack running? retrying in ${INTERVAL}s"
-  fi
-  sleep "$INTERVAL"
-done
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main; fi

@@ -82,9 +82,8 @@ RUN curl -fsSL -o runner.tar.gz \
  && ./bin/installdependencies.sh \
  && chown -R runner:runner /home/runner
 
-# Where `actions/setup-node` caches the Node it downloads. On the ci pool this path is a named
-# volume, so the download happens once for the pool rather than once per job; on the agent pool it
-# is container-local and dies with the container.
+# Where `actions/setup-node` caches the Node it downloads. This is container-local and dies
+# with the container, so a previous job cannot poison a later job through executable caches.
 ENV RUNNER_TOOL_CACHE=/opt/hostedtoolcache
 RUN mkdir -p /opt/hostedtoolcache && chown runner:runner /opt/hostedtoolcache
 
