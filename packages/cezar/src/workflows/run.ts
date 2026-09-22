@@ -4394,6 +4394,18 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
+    const stepModel = agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model;
+    // The step's own `model:` wins over the task's, which means a workflow written for one
+    // backend hands its pin to whatever backend the task actually chose. `opus` is a Claude
+    // tier alias; codex accepts the thread, then the API refuses every request on it and the
+    // turn ends having produced nothing — no text, no tokens, no error — so the run settled as
+    // if the agent had simply finished. This is the SAME pairing the continuation path already
+    // refuses (`continueRun`, ~line 3217) through the same guard; only the step path had never
+    // asked it. Custom and unknown ids still pass untouched — the guard only recognises a
+    // model that is demonstrably another runner's.
+    if (stepModel && modelConflictsWithRunner(stepModel, stepBackend)) {
+      return `step "${step.id}": model '${stepModel}' is not a ${stepBackend} model — change the step's \`model:\` in the workflow, or run it with the runner that serves it`;
+    }
     // Normalise the selected model to canonical `provider/model` and back to the
     // backend's own wire form via the ONE shared mapper (#405). Fail-loud: an
     // unresolvable model (e.g. a bare id on opencode) returns the step error
@@ -4402,7 +4414,7 @@ export class RunManager {
     try {
       const normalized = normalizeModelForBackend(
         stepBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : step.model ?? input.model,
+        stepModel,
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
       backendModel = normalized?.backendModel;
