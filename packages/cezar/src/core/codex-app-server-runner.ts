@@ -124,6 +124,10 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** The backend failure already reported for the active turn. The app-server announces one
+   *  refusal on up to two channels — an `error` notification and the failed turn itself — and
+   *  both carry the same text, so without this the run log would read as two failures. */
+  private reportedError: string | undefined;
   /** "Has the app-server really terminated?" — the question `child.killed`
    *  does not answer: it flips on signal delivery, so the SIGTERM this runner
    *  sends would otherwise veto its own SIGKILL escalation (#844). */
@@ -446,6 +450,27 @@ class CodexSession implements AgentSession {
       case 'turn/started': {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
+        this.reportedError = undefined;
+        break;
+      }
+      // The app-server's own out-of-band channels. `warning` is advisory — a model whose
+      // metadata it does not recognise announces itself here, BEFORE the turn spends a token —
+      // while `error` is the request-level failure, which `willRetry` says whether codex will
+      // try to recover from on its own.
+      case 'warning': {
+        if (this.isForeignThreadTurn(params)) break;
+        const message = stringField(params, 'message');
+        if (message) this.emit({ type: 'note', message: `codex: ${message}` });
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        const message = errorMessageOf(params.error) ?? 'codex reported an error';
+        if (params.willRetry === true) {
+          this.emit({ type: 'note', message: `codex: ${message} (retrying)` });
+          break;
+        }
+        this.reportBackendError(message);
         break;
       }
       case 'item/agentMessage/delta': {
@@ -498,10 +523,15 @@ class CodexSession implements AgentSession {
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
-          const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+        // A refused request settles as `turn/completed` whose TURN reports `status: 'failed'`
+        // — the method alone is not the verdict. Reading only `turn/failed` let an API
+        // rejection (a model the account cannot use) reach the run as an ordinary end of turn:
+        // no error, no text, no tokens, and a session parked as if the agent were waiting.
+        const turn = asRecord(params.turn);
+        if ((method === 'turn/failed' || turn.status === 'failed') && !this.terminatedByCezar) {
+          this.reportBackendError(
+            errorMessageOf(params.error) ?? errorMessageOf(turn.error) ?? 'codex turn failed',
+          );
         }
         this.emit({ type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
@@ -513,6 +543,13 @@ class CodexSession implements AgentSession {
       default:
         break;
     }
+  }
+
+  /** Report a backend failure exactly once per turn, whichever channel carried it. */
+  private reportBackendError(message: string): void {
+    if (message === this.reportedError) return;
+    this.reportedError = message;
+    this.emit({ type: 'error', message });
   }
 
   private emit(event: AgentEvent): void {
@@ -612,6 +649,35 @@ function clean<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined && v !== null) out[k as keyof T] = v as T[keyof T];
   }
   return out;
+}
+
+/** A nested object field, or an empty record — the shape every `params.x` probe below wants. */
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+/**
+ * The human-readable text of an app-server error object, wherever it is attached.
+ *
+ * codex passes an upstream API refusal through verbatim, so `message` is itself the serialized
+ * response body — `{"type":"error","status":400,"error":{"message":"…"}}`. Unwrapped once here,
+ * because this string is what the cockpit shows as the reason the run failed, and a JSON blob
+ * in that banner tells the reader to go find the log. Anything that is not that shape is
+ * returned untouched.
+ */
+function errorMessageOf(error: unknown): string | undefined {
+  const raw = typeof error === 'string' ? error.trim() || undefined : stringField(asRecord(error), 'message');
+  return raw === undefined ? undefined : unwrapSerializedError(raw);
+}
+
+function unwrapSerializedError(raw: string): string {
+  if (!raw.startsWith('{')) return raw;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return stringField(asRecord(asRecord(parsed).error), 'message') ?? raw;
+  } catch {
+    return raw;
+  }
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {
