@@ -260,6 +260,11 @@ describe('mapCodexNotification edge cases', () => {
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'failed' }, error: { message: 'Turn interrupted' } } }, 'cancelled'],
       [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'interrupted' } } }, 'cancelled'],
       [{ method: 'turn/failed', params: { turn: { id: 't1' } } }, 'error'],
+      // The method is not the verdict: a refused request settles as `turn/completed` whose
+      // TURN reports `status: 'failed'` and carries the error on itself, not on `params`.
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'boom' } } } }, 'error'],
+      [{ method: 'turn/completed', params: { turn: { id: 't1', status: 'failed', error: { message: 'Turn interrupted' } } } }, 'cancelled'],
+      [{ method: 'turn/failed', params: { turn: { id: 't1', status: 'failed', error: { message: 'Turn interrupted' } } } }, 'cancelled'],
     ];
     for (const [frame, stopReason] of cases) {
       const [event] = mapCodexNotification(frame, state).events;

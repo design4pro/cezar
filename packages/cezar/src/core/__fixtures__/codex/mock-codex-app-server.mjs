@@ -11,6 +11,17 @@
 import { createInterface } from 'node:readline';
 
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+
+// codex passes an upstream refusal through verbatim: the serialized response body IS the
+// `message`. Captured from a live app-server (0.155.1) rejecting a Claude alias.
+const MODEL_REFUSAL_BODY = JSON.stringify({
+  type: 'error',
+  status: 400,
+  error: {
+    type: 'invalid_request_error',
+    message: "The 'opus' model is not supported when using Codex with a ChatGPT account.",
+  },
+});
 const rl = createInterface({ input: process.stdin });
 
 const ignoreEof = process.env.MOCK_CODEX_IGNORE_EOF === '1';
@@ -63,6 +74,44 @@ rl.on('line', (line) => {
         turn: { id: 'turn_mock_1', status: 'failed' },
         error: { message: 'model unavailable' },
       } });
+      return;
+    }
+    if (turnText.includes('mock:model-rejected')) {
+      // The wire shape a real app-server (0.155.1) produces when the API refuses the
+      // thread's model: a `warning` at thread level, then an `error` notification, then
+      // `turn/completed` whose TURN carries `status: 'failed'` and the error. Captured from
+      // a live run — the method is `turn/completed`, never `turn/failed`.
+      emit({ method: 'warning', params: { threadId: 'th_mock_1', message: 'Model metadata for `opus` not found.' } });
+      emit({ method: 'error', params: {
+        threadId: 'th_mock_1', turnId: 'turn_mock_1', willRetry: false,
+        error: { message: MODEL_REFUSAL_BODY },
+      } });
+      emit({ method: 'turn/completed', params: {
+        threadId: 'th_mock_1',
+        turn: { id: 'turn_mock_1', status: 'failed', error: { message: MODEL_REFUSAL_BODY } },
+      } });
+      return;
+    }
+    if (turnText.includes('mock:retryable-error')) {
+      // `willRetry: true` — codex will try again on its own, so it is a note, not a failure.
+      emit({ method: 'error', params: {
+        threadId: 'th_mock_1', turnId: 'turn_mock_1', willRetry: true,
+        error: { message: 'stream disconnected before completion' },
+      } });
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_r1', text: '' } } });
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_r1', text: 'Recovered after the retry.' } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: 'turn_mock_1', status: 'completed' } } });
+      return;
+    }
+    if (turnText.includes('mock:child-error')) {
+      // A sub-agent child thread's error must not fail the parent session (#600).
+      emit({ method: 'error', params: {
+        threadId: 'th_child', turnId: 'turn_child', willRetry: false,
+        error: { message: 'the child thread blew up' },
+      } });
+      emit({ method: 'item/started', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_p2', text: '' } } });
+      emit({ method: 'item/completed', params: { threadId: 'th_mock_1', turnId: 'turn_mock_1', item: { type: 'agentMessage', id: 'item_p2', text: 'Still working after the sub-agent failed.' } } });
+      emit({ method: 'turn/completed', params: { threadId: 'th_mock_1', turn: { id: 'turn_mock_1', status: 'completed' } } });
       return;
     }
     if (turnText.includes('mock:subagent-activity')) {

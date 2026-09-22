@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
@@ -39,6 +40,13 @@ describe('model identity wiring (dry run)', () => {
     savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_ARGS_FILE = process.env.CEZ_MOCK_ARGS_FILE;
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
+    // Codex has no CEZ_DRY_RUN mock of its own, so the bundled app-server fixture stands in.
+    // The step-model guard below must refuse BEFORE anything spawns; pointing the binary at the
+    // fixture is what keeps a regression a failed assertion rather than a real, networked run.
+    savedEnv.CEZ_CODEX_BIN = process.env.CEZ_CODEX_BIN;
+    process.env.CEZ_CODEX_BIN = fileURLToPath(
+      new URL('../core/__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+    );
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
     delete process.env.CEZ_FOLLOWUPS;
@@ -172,6 +180,57 @@ describe('model identity wiring (dry run)', () => {
     expect(record?.status).toBe('failed');
     expect(record?.error).toContain('Failed to authenticate');
     expect(record?.steps.find((step) => step.id === 'work')?.status).toBe('failed');
+  }, 30_000);
+
+  /**
+   * A workflow step pins `model: opus` because the workflow was written for Claude. Run the same
+   * workflow on codex and that pin — which wins over the model the composer picked — reached the
+   * codex app-server verbatim. Codex accepts the thread, then the API refuses the request, and
+   * the turn ends having done nothing. The pairing guard already knew `opus` is not a codex
+   * model (`model-presets.ts`); nothing on the step path had ever asked it.
+   */
+  it("refuses a step model written for another runner before anything spawns", async () => {
+    const pinned: WorkflowDef = {
+      name: 'foreign-step-model',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}', model: 'opus' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    writeFileSync(argsFile, '', 'utf8');
+    const record = manager.startRun(pinned, {
+      task: 'do the thing',
+      runner: 'codex',
+      model: 'gpt-5.1-codex',
+    });
+    await settle(record.id);
+
+    const stored = store.getRun(record.id);
+    expect(stored?.status).toBe('failed');
+    expect(stored?.error).toContain("model 'opus' is not a codex model");
+    // The message has to name where the pin lives, or the reader has nowhere to go.
+    expect(stored?.error).toContain('step "work"');
+    expect(stored?.steps.find((step) => step.id === 'work')?.status).toBe('failed');
+  }, 30_000);
+
+  it('leaves a step model the runner does serve alone', async () => {
+    const pinned: WorkflowDef = {
+      name: 'native-step-model',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}', model: 'haiku' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    writeFileSync(argsFile, '', 'utf8');
+    const record = manager.startRun(pinned, { task: 'do the thing', model: 'opus' });
+    await settle(record.id);
+
+    expect(store.getRun(record.id)?.status).toBe('done');
+    // The step's pin still wins over the task-level model — this fix narrows nothing.
+    expect(capturedModel()).toBe('haiku');
+    expect(store.getRun(record.id)?.modelIdentity).toBe('anthropic/haiku');
   }, 30_000);
 
   it('a continuation with an unsupported Codex provider still fails loudly', async () => {
