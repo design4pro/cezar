@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from '../automations/store.ts';
 import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
 import { RunStore } from '../runs/store.ts';
+import { SkillsUpdateCoordinator } from '../skills-update.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp, startServer, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -198,15 +199,15 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
     /** Boot on an ephemeral port, wait for `listening` to have run its warm-up, then close. */
     const boot = async (): Promise<void> => {
       const started = vi.spyOn(WorkspaceAutomationScheduler.prototype, 'start');
+      const warmed = vi.spyOn(SkillsUpdateCoordinator.prototype, 'start');
       const server = startServer(
         { repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
         0,
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // The warm-up chain is `listProjects().then(…)`; a macrotask turn is enough for it to run
-        // to the point where it either starts the scheduler or returns early.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Observe the async warm-up boundary instead of assuming disk discovery finishes in 50ms.
+        await vi.waitFor(() => expect(process.env.CEZ_AUTOMATIONS === '0' ? warmed : started).toHaveBeenCalledTimes(1));
       } finally {
         server.close();
       }
@@ -261,9 +262,8 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // Same warm-up wait as "background scheduler" above: the re-baseline runs inside the
-        // `listProjects().then(...)` chain, strictly before `automationScheduler.start()`.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Re-open persisted state while waiting: warm-up finishes after the listening event.
+        await vi.waitFor(() => expect(AutomationStore.open(dataDir).state(staleId)?.baselineAt).toBeTruthy());
       } finally {
         server.close();
       }
