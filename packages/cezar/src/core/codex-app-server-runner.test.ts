@@ -176,3 +176,65 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
     });
   });
 });
+
+/**
+ * A backend failure the app-server reports WITHOUT `turn/failed`. Live evidence: a codex run
+ * whose thread carried a model the API refuses answered `warning` → `error` → `turn/completed`
+ * with `turn.status: 'failed'`. The runner only read `turn/failed`, so nothing reached the run:
+ * zero tokens, no text, no error, and the session parked as if the agent had finished its turn
+ * and were waiting for a reply. Seventeen runs settled `done` that way before anyone noticed.
+ */
+describe('a backend failure the app-server reports on turn/completed', () => {
+  const mockBin = fileURLToPath(
+    new URL('./__fixtures__/codex/mock-codex-app-server.mjs', import.meta.url),
+  );
+
+  function run(prompt: string): Promise<AgentEvent[]> {
+    const events: AgentEvent[] = [];
+    const session = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 }).startSession(
+      { userPrompt: prompt, cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+    return session.result.then(() => events);
+  }
+
+  it('fails the session on a rejected model instead of settling the turn normally', async () => {
+    const events = await run('mock:model-rejected');
+
+    // Unwrapped: codex hands the serialized upstream body through as the message, and this
+    // string is what the cockpit shows as the reason the run failed.
+    expect(events).toContainEqual({
+      type: 'error',
+      message: "The 'opus' model is not supported when using Codex with a ChatGPT account.",
+    });
+    // One error, not one per signal: the `error` notification and the failed turn carry the
+    // same message, and a duplicate would read as two separate failures in the run log.
+    expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
+  }, 15_000);
+
+  it("surfaces the app-server's model warning as a note", async () => {
+    const events = await run('mock:model-rejected');
+
+    expect(
+      events.some((e) => e.type === 'note' && e.message.includes('Model metadata for `opus` not found.')),
+    ).toBe(true);
+  }, 15_000);
+
+  it('keeps a retryable error a note, so codex may recover on its own', async () => {
+    const events = await run('mock:retryable-error');
+
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(
+      events.some((e) => e.type === 'note' && e.message.includes('stream disconnected before completion')),
+    ).toBe(true);
+    expect(events).toContainEqual({ type: 'text', text: 'Recovered after the retry.' });
+  }, 15_000);
+
+  it("does not fail the parent session on a sub-agent child thread's error (#600)", async () => {
+    const events = await run('mock:child-error');
+
+    expect(events.some((e) => e.type === 'error')).toBe(false);
+    expect(events).toContainEqual({ type: 'text', text: 'Still working after the sub-agent failed.' });
+  }, 15_000);
+});

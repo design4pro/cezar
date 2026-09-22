@@ -255,12 +255,17 @@ function mapTurnEnd(
 
 /** §7.1: turn/completed→end_turn, turn/failed→error — except an interrupted
  *  turn (turn.status `interrupted`, or an interrupt-shaped error message,
- *  the only wire signals codex gives us) → cancelled. */
+ *  the only wire signals codex gives us) → cancelled.
+ *
+ *  The METHOD is not the whole verdict: a refused request arrives as `turn/completed` whose
+ *  turn reports `status: 'failed'`, and the error rides on the turn rather than on `params`,
+ *  so both places are read before the turn is called a clean end. */
 function turnStopReason(params: Record<string, unknown>, failed: boolean): StopReason {
   const turn = isRecord(params.turn) ? params.turn : {};
   if (turn.status === 'interrupted') return 'cancelled';
-  if (!failed) return 'end_turn';
-  return /interrupt/i.test(errorMessage(params.error) ?? '') ? 'cancelled' : 'error';
+  if (!failed && turn.status !== 'failed') return 'end_turn';
+  const message = errorMessage(params.error) ?? errorMessage(turn.error) ?? '';
+  return /interrupt/i.test(message) ? 'cancelled' : 'error';
 }
 
 // ---- plan -------------------------------------------------------------------
