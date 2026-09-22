@@ -47,7 +47,7 @@ import {
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
-import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema, writeTargetSchema, writePathsSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -659,6 +659,8 @@ const startRunSchema = z
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
+    writeTarget: writeTargetSchema.optional(),
+    writePaths: writePathsSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -3858,6 +3860,23 @@ export function createApp(deps: ServerDeps) {
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
+      // PR workflows take an explicit leading PR argument, not a guessed title reference.
+      const prSkills = new Set(['om-auto-fix-pr', 'om-pr-autopilot', 'om-auto-review-pr', 'om-auto-continue-pr', 'om-auto-continue-pr-loop']);
+      const requiresTarget = ['pr-fix', 'pr-autopilot', 'pr-review'].includes(workflow.name)
+        || workflow.steps.some((step) => prSkills.has(step.skill ?? '')
+          || prSkills.has(/^\/(\S+)/.exec(step.prompt ?? '')?.[1] ?? ''));
+      let writeTarget = parsed.data.writeTarget;
+      if (requiresTarget && !writeTarget) {
+        const argument = parsed.data.task.trim().replace(/^\/(?:om-auto-fix-pr|om-pr-autopilot|om-auto-review-pr|om-auto-continue-pr|om-auto-continue-pr-loop)\s+/, '');
+        const url = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/([1-9]\d*)(?:\s|$)/.exec(argument);
+        const number = /^#?([1-9]\d*)(?:\s|$)/.exec(argument);
+        if (url?.[1] && url[2]) writeTarget = { repository: url[1], number: Number(url[2]) };
+        else if (number) {
+          const remote = parseRemote((await getRepoInfo(repoRoot))?.remote ?? '');
+          if (remote?.host === 'github.com') writeTarget = { repository: `${remote.owner}/${remote.repo}`, number: Number(number[1]) };
+        }
+        if (!writeTarget) return c.json({ error: 'PR workflows require writeTarget or a leading PR number (with a GitHub remote) or GitHub PR URL' }, 400);
+      }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
       if (blocked) return c.json({ error: blocked }, 409);
@@ -3886,6 +3905,8 @@ export function createApp(deps: ServerDeps) {
       const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
+        writeTarget,
+        writePaths: parsed.data.writePaths,
         model: parsed.data.model,
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
@@ -3901,6 +3922,11 @@ export function createApp(deps: ServerDeps) {
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
+      if (input.writeTarget) {
+        const conflict = manager.writeTargetConflict(input.writeTarget);
+        if (conflict) return c.json({ error: conflict }, 409);
+        if (variants > 1) return c.json({ error: 'a write target requires one owner; parallel variants are not allowed' }, 409);
+      }
       if (variants > 1) {
         const runs = manager.startVariants(workflow, input, variants);
         // The entry points at the first variant — the thread the composer navigates to.

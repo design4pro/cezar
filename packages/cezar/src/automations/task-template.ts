@@ -122,6 +122,7 @@ export async function launchAutomationRun(options: {
   const { definition, candidate } = options;
   const workflow = await resolveWorkflow(options.root, definition);
   const input = startInput(definition, renderAutomationTask(definition, candidate), options.dispatchEnabled ?? false);
+  input.writeTarget = { repository: candidate.repo, number: candidate.number };
   const runs = (definition.task.variants ?? 1) > 1
     ? options.manager.startVariants(workflow, input, definition.task.variants ?? 1)
     : [options.manager.startRun(workflow, input)];

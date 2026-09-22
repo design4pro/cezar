@@ -199,3 +199,6 @@ _Avoid_: hook, glue, handoff (that word is already taken)
 - **kind**: of a step (agent or check), of a child task (implement or review), of a trigger (GitHub or schedule). Always qualify it.
 - **handoff**: say handoff journal, or Continue, or "open in terminal". Never the bare word.
 - **inbox**: the follow-ups Inbox, or a child task's dispatch inbox. Always qualify it.
+
+**Write target**:
+An explicitly declared GitHub repository and issue or pull-request number reserved by an unfinished task. A parent can delegate it down one ancestor chain; a sibling or another task tree cannot own it concurrently.
