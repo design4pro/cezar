@@ -3860,6 +3860,23 @@ export function createApp(deps: ServerDeps) {
         workflow = workflows.find((w) => w.name === parsed.data.workflow);
         if (!workflow) return c.json({ error: `unknown workflow: ${parsed.data.workflow}` }, 404);
       }
+      // PR workflows take an explicit leading PR argument, not a guessed title reference.
+      const prSkills = new Set(['om-auto-fix-pr', 'om-pr-autopilot', 'om-auto-review-pr', 'om-auto-continue-pr', 'om-auto-continue-pr-loop']);
+      const requiresTarget = ['pr-fix', 'pr-autopilot', 'pr-review'].includes(workflow.name)
+        || workflow.steps.some((step) => prSkills.has(step.skill ?? '')
+          || prSkills.has(/^\/(\S+)/.exec(step.prompt ?? '')?.[1] ?? ''));
+      let writeTarget = parsed.data.writeTarget;
+      if (requiresTarget && !writeTarget) {
+        const argument = parsed.data.task.trim().replace(/^\/(?:om-auto-fix-pr|om-pr-autopilot|om-auto-review-pr|om-auto-continue-pr|om-auto-continue-pr-loop)\s+/, '');
+        const url = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/([1-9]\d*)(?:\s|$)/.exec(argument);
+        const number = /^#?([1-9]\d*)(?:\s|$)/.exec(argument);
+        if (url?.[1] && url[2]) writeTarget = { repository: url[1], number: Number(url[2]) };
+        else if (number) {
+          const remote = parseRemote((await getRepoInfo(repoRoot))?.remote ?? '');
+          if (remote?.host === 'github.com') writeTarget = { repository: `${remote.owner}/${remote.repo}`, number: Number(number[1]) };
+        }
+        if (!writeTarget) return c.json({ error: 'PR workflows require writeTarget or a leading PR number (with a GitHub remote) or GitHub PR URL' }, 400);
+      }
       const fallback = parsed.data.runner ?? (await loadConfig(repoRoot)).defaultRunner;
       const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
       if (blocked) return c.json({ error: blocked }, 409);
@@ -3888,7 +3905,7 @@ export function createApp(deps: ServerDeps) {
       const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
-        writeTarget: parsed.data.writeTarget,
+        writeTarget,
         writePaths: parsed.data.writePaths,
         model: parsed.data.model,
         runner: parsed.data.runner,
