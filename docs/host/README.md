@@ -117,32 +117,25 @@ The pool serves `planned.travel` and `money-tracker.online`; it lives here becau
 with the cockpit, and the cockpit's repository is the only one of the three that is not a consumer
 of it. See `docs/adr/0007-the-host-layer-lives-here.md`.
 
-Three layers, each with one job. launchd keeps `pool.sh` alive, `pool.sh` keeps the containers
-alive, and `--restart always` plus `--ephemeral` recycle a container after every single job. The
-recycling is the point rather than a side effect: `claude-code-review.yml` runs an agent with
-`--permission-mode bypassPermissions` and justifies it in a comment with "the runner is
-disposable". On GitHub-hosted infrastructure that was a property of the platform. Here it is a
-property of `entrypoint.sh`, and it has to be restated there or the justification quietly becomes
-false.
+launchd keeps `pool.sh` alive. The supervisor leaves running containers alone, disables their old
+restart policy without interrupting a job, and removes exited containers before creating replacements.
+Docker restart reuses a writable layer; it is never isolation. Each replacement uses the immutable
+image ID resolved from `GHA_RUNNER_IMAGE` (default `gha-runner:local`) for that cycle and runs
+with `--restart=no`. Both CI and agent pools have no writable mounts, including package stores and
+Node tool caches. All files written by a job disappear with its container. Downloads therefore cost
+more than the previous shared caches, deliberately.
 
-Two pools, told apart by label and by what they mount:
+The organization PAT stays in the host's `GHA_RUNNER_TOKEN_FILE`; only the host calls GitHub's
+registration-token endpoint. A container receives the short-lived registration token and unsets it
+before starting the runner. No organization PAT, host home, Docker socket or credential file is mounted.
+The registration token remains visible in Docker metadata until removal, so Docker access remains a
+trusted host capability. `--ephemeral` deregisters completed jobs; `--replace` repairs registration
+after a crash. A failed registration, launch, daemon connection or removal retries next cycle.
 
-| Pool  | Labels                          | Mounts                      | Runs                                      |
-| ----- | ------------------------------- | --------------------------- | ----------------------------------------- |
-| ci    | `self-hosted,linux,ARM64,ci`    | pnpm store, Node tool cache | ci, a11y, deploys, merge-gate, promote    |
-| agent | `self-hosted,linux,ARM64,agent` | nothing                     | claude, claude-code-review, sentry-triage |
-
-CI jobs execute arbitrary pull-request code too, so the ci pool's containers are no longer lived
-than the agent pool's - what differs is that a content-addressed package store consumed under
-`--frozen-lockfile` and a Node tarball cache survive between them. A workspace never does. The
-browsers are not a mount either: they are in the image, so there is nothing there for a job to
-poison.
-
-A container between jobs is restarting, not missing, which is why `pool.sh` uses `docker inspect`
-rather than `docker ps` as its existence check. A SIGKILL or an OOM leaves `.runner` and
-`.credentials` behind, and `--replace` does not rescue that because `config.sh` refuses locally
-first; `entrypoint.sh` clears the stale config itself, or `--restart always` would crash-loop
-forever. That is how one container was found dead while the others looked healthy.
+| Pool | Labels | Mounts | Runs |
+| --- | --- | --- | --- |
+| ci | `self-hosted,linux,ARM64,ci` | none | ci, a11y, merge-gate, promote |
+| agent | `self-hosted,linux,ARM64,agent` | none | sentry-triage |
 
 Size and ceilings are environment variables of `pool.sh`, set in the installed plist:
 
@@ -156,7 +149,7 @@ Without ceilings every container sees the whole OrbStack VM, and a burst of six 
 host to a load average of ~500. The CPU quota also sizes the jobs themselves: Node's
 `os.availableParallelism()` reports the quota, so vitest starts that many workers, not one per VM
 core. Swap equal to memory means an over-budget job is OOM-killed rather than paged. `pool.sh`
-applies changed ceilings to running containers with `docker update` on its next cycle, but it never
+applies changed ceilings to replacement containers, never to an active job, and it never
 removes containers above a lowered count - stop and remove those by hand once they are idle.
 
 Setting up the host:
@@ -179,16 +172,17 @@ in the organisation can schedule work on this Mac.
 
 ### The kill switch
 
-Every `runs-on` reads an organisation variable with the pool as its default:
+Jobs assigned to the CI pool read an organisation variable with the pool as their default:
 
 ```yaml
 runs-on: ${{ fromJSON(vars.RUNNER_CI || '["self-hosted","linux","ARM64","ci"]') }}
 ```
 
-Setting `RUNNER_CI` to `["ubuntu-latest"]` moves every job back to GitHub-hosted runners in
-seconds, with no pull request and no merge. That matters because a LaunchAgent runs only while the
-user is logged in, and production deploys now depend on it: the recovery path for a host that is
-down cannot itself require merging a pull request on that host.
+Setting `RUNNER_CI` to `["ubuntu-latest"]` moves CI pool jobs back to GitHub-hosted runners
+without a pull request. `RUNNER_AGENT` provides the same override for the agent pool. A LaunchAgent
+runs only while the user is logged in, so these overrides restore validation after a host outage.
+Production deployment and rollback already run on GitHub-hosted runners and do not depend on this
+host; their recovery path remains available while the local pools are down.
 
 ### Why this stays a LaunchAgent
 
@@ -238,7 +232,8 @@ money-tracker.online's e2e and a11y jobs. Those directives are gone - both `e2e-
 already declared that they assume "a runner that already carries the browsers" and never run
 `playwright install`, and on a runner we build, that is the image's job. One place to bump instead
 of three, but it is off to the side now, so: bump Playwright in a repository, bump this tag,
-rebuild, and `bash host/runner/pool.sh` picks the new image up as containers recycle.
+rebuild, and the running supervisor picks the new image ID up as containers finish. Do not start a
+second supervisor alongside launchd.
 
 ### What the image must carry
 
@@ -261,3 +256,42 @@ that nothing is quietly downloaded during the check:
 docker run --rm --network none gha-runner:local \
   bash -lc 'for t in node pnpm gh unzip zip xz git jq curl; do command -v "$t" || echo "MISSING $t"; done'
 ```
+
+### Rolling out disposable containers
+
+1. Run the repository validation gate and `bash host/runner/test-isolation.sh` on a Docker host.
+2. Build the reviewed image under a new tag and record its `docker image inspect` ID.
+3. Point the installed pool service at the reviewed supervisor and image. Restart only the supervisor;
+   never stop running job containers. Existing containers finish on their original image and mounts.
+4. Verify replacements use the recorded ID, `RestartPolicy.Name=no`, and no mounts. Verify both pools
+   accept and complete a job. Only then remove unused old cache volumes manually.
+
+A host or daemon restart can fail an in-flight job; the supervisor recovers slots, not job progress.
+Rolling back the supervisor to the former `--restart always` implementation restores the isolation bug;
+prefer the organization hosted-runner override while diagnosing a failed rollout.
+
+After reviewing the image and supervisor, the host-only commands are:
+
+```sh
+# Run from the reviewed checkout; keep this directory after installation.
+runner_release="$HOME/.local/share/gha-runner/$(git rev-parse HEAD)"
+mkdir -p "$runner_release"
+cp host/runner/pool.sh "$runner_release/pool.sh"
+docker build -t "gha-runner:$(git rev-parse --short HEAD)" host/runner
+runner_image_id="$(docker image inspect --format '{{.Id}}' "gha-runner:$(git rev-parse --short HEAD)")"
+runner_plist="$HOME/Library/LaunchAgents/dev.gha-runner.pool.plist"
+cp "$runner_plist" "$runner_plist.before-disposable"
+/usr/libexec/PlistBuddy -c "Set :ProgramArguments:1 $runner_release/pool.sh" "$runner_plist"
+/usr/libexec/PlistBuddy -c "Delete :EnvironmentVariables:GHA_RUNNER_IMAGE" "$runner_plist" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :EnvironmentVariables:GHA_RUNNER_IMAGE string $runner_image_id" "$runner_plist"
+# This stops only pool.sh, not Docker containers. Do not stop or restart a job container.
+launchctl bootout "gui/$(id -u)/dev.gha-runner.pool"
+launchctl bootstrap "gui/$(id -u)" "$runner_plist"
+```
+
+Record the old container IDs first. Wait for active jobs to finish; a new container ID, pinned image
+ID, no mounts and `RestartPolicy.Name=no` prove that slot migrated. Old idle runners may remain
+until they take their final job; do not infer a fully migrated pool just from restarting launchd.
+If a full drain is required, first move job routing to GitHub-hosted runners and confirm no busy
+runners in the organization API before removing old idle containers. Restore routing only after
+new registrations and a canary job succeed.

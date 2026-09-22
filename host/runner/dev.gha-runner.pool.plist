@@ -10,7 +10,7 @@
      Deliberately NOT `bash -lc`: a login shell sources ~/.profile, and anything exported there
      would reach a container that runs arbitrary pull-request code. The explicit PATH below is the
      whole environment this service gets, and it carries no credential at all - the registration
-     token is read from a file by pool.sh, mounted read-only into each container. A path is not a
+     organization token is read only by pool.sh; containers receive a short-lived registration token. A path is not a
      token; the same reasoning put GH_CONFIG_DIR rather than a credential into
      dev.cezar.cockpit.plist.
 
