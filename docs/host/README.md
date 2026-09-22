@@ -134,8 +134,8 @@ after a crash. A failed registration, launch, daemon connection or removal retri
 
 | Pool | Labels | Mounts | Runs |
 | --- | --- | --- | --- |
-| ci | `self-hosted,linux,ARM64,ci` | none | ci, a11y, deploys, merge-gate, promote |
-| agent | `self-hosted,linux,ARM64,agent` | none | claude, claude-code-review, sentry-triage |
+| ci | `self-hosted,linux,ARM64,ci` | none | ci, a11y, merge-gate, promote |
+| agent | `self-hosted,linux,ARM64,agent` | none | sentry-triage |
 
 Size and ceilings are environment variables of `pool.sh`, set in the installed plist:
 
@@ -172,16 +172,17 @@ in the organisation can schedule work on this Mac.
 
 ### The kill switch
 
-Every `runs-on` reads an organisation variable with the pool as its default:
+Jobs assigned to the CI pool read an organisation variable with the pool as their default:
 
 ```yaml
 runs-on: ${{ fromJSON(vars.RUNNER_CI || '["self-hosted","linux","ARM64","ci"]') }}
 ```
 
-Setting `RUNNER_CI` to `["ubuntu-latest"]` moves every job back to GitHub-hosted runners in
-seconds, with no pull request and no merge. That matters because a LaunchAgent runs only while the
-user is logged in, and production deploys now depend on it: the recovery path for a host that is
-down cannot itself require merging a pull request on that host.
+Setting `RUNNER_CI` to `["ubuntu-latest"]` moves CI pool jobs back to GitHub-hosted runners
+without a pull request. `RUNNER_AGENT` provides the same override for the agent pool. A LaunchAgent
+runs only while the user is logged in, so these overrides restore validation after a host outage.
+Production deployment and rollback already run on GitHub-hosted runners and do not depend on this
+host; their recovery path remains available while the local pools are down.
 
 ### Why this stays a LaunchAgent
 
