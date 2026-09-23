@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const pool = fileURLToPath(new URL('../../../host/runner/pool.sh', import.meta.url));
-function reconcile(state: string, failure = '') {
+function reconcile(state: string, failure = '', artifacts = '') {
   return execFileSync('bash', ['-c', `
     exec 2>&1
     source "$1"
@@ -17,7 +17,7 @@ function reconcile(state: string, failure = '') {
         run) ${failure === 'run' ? 'return 1' : ':'} ;;
       esac
     }
-    ensure gha-ci-1 self-hosted,ci 3 6g || echo RETRY
+    ensure gha-ci-1 self-hosted,ci 3 6g ${artifacts} || echo RETRY
   `, 'test', pool], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 }
 describe('host runner reconciliation', () => {
@@ -34,6 +34,11 @@ describe('host runner reconciliation', () => {
     expect(output).toContain('RUNNER_REGISTRATION_TOKEN=short-lived sha256:pinned');
     expect(output).not.toContain('--volume');
     if (state !== 'missing') expect(output.indexOf('rm gha-ci-1')).toBeLessThan(output.indexOf('run --detach'));
+  });
+  it('mounts the artifact store only when one is given', () => {
+    const output = reconcile('missing', '', '/srv/ci-artifacts');
+    expect(output).toContain('--volume /srv/ci-artifacts:/ci-artifacts');
+    expect(output.match(/--volume/g)).toHaveLength(1);
   });
   it.each(['token', 'remove', 'run'])('retries after %s failure', (failure) => {
     const output = reconcile('exited', failure);

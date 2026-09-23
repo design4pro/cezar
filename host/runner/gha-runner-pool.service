@@ -1,0 +1,19 @@
+# systemd unit for a Linux pool host - the counterpart of dev.gha-runner.pool.plist.
+# Install: see docs/host/README.md, "Linux host". Settings live in /etc/gha-runner/pool.env,
+# never in this file, so the unit is the same on every host.
+[Unit]
+Description=GitHub Actions ephemeral runner pool
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=__USER__
+EnvironmentFile=/etc/gha-runner/pool.env
+ExecStart=/bin/bash __POOL_SH__
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

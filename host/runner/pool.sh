@@ -16,6 +16,20 @@ INTERVAL="${GHA_RUNNER_INTERVAL:-60}"
 CI_COUNT="${GHA_RUNNER_CI_COUNT:-6}"
 AGENT_COUNT="${GHA_RUNNER_AGENT_COUNT:-2}"
 
+# What a slot is called and what it answers to. The defaults are the Mac's. The container name is
+# also the runner's registration name, and registration uses --replace, so two hosts sharing a
+# prefix would take each other's registrations: every host needs its own prefix.
+PREFIX="${GHA_RUNNER_NAME_PREFIX:-gha}"
+CI_LABELS="${GHA_RUNNER_CI_LABELS:-self-hosted,linux,ARM64,ci}"
+AGENT_LABELS="${GHA_RUNNER_AGENT_LABELS:-self-hosted,linux,ARM64,agent}"
+
+# The one writable mount a pool may have, and only the CI pool: a host directory mounted at
+# /ci-artifacts, where design4pro/.github's artifact-upload/-download actions keep a run's
+# artifacts instead of GitHub's storage. Unset (the Mac's state) means no mount at all. It is
+# shared by every job of every repository in the runner group - an artifact store, never a cache:
+# nothing a job reads from it is executed by the toolchain on its own.
+ARTIFACTS_DIR="${GHA_RUNNER_ARTIFACTS_DIR:-}"
+
 # Per-container ceilings. Without them every container saw the whole VM, and six CI jobs at once
 # drove the host to a load average of ~500. `--cpus` is a CFS quota that Node's
 # os.availableParallelism() honours, so vitest sizes its worker pool to the quota rather than to the
@@ -38,8 +52,8 @@ registration_token() {
 }
 
 ensure() {
-  local name="$1" labels="$2" cpus="$3" memory="$4"
-  local state token
+  local name="$1" labels="$2" cpus="$3" memory="$4" artifacts="${5:-}"
+  local state token mounts=()
   state="$(docker inspect --type container --format '{{.State.Status}}' "$name" 2>/dev/null)" || state=missing
   case "$state" in
     running|paused|restarting)
@@ -54,12 +68,14 @@ ensure() {
     *) log "unknown state for $name; leaving it alone"; return 1 ;;
   esac
   token="$(registration_token)" || { log "registration failed for $name; retrying next cycle"; return 1; }
+  [ -n "$artifacts" ] && mounts=(--volume "$artifacts:/ci-artifacts")
   log "creating $name [$labels] from $IMAGE_ID"
   docker run --detach \
     --name "$name" \
     --restart=no \
     --hostname "$name" \
     --cpus "$cpus" --memory "$memory" --memory-swap "$memory" \
+    ${mounts[@]+"${mounts[@]}"} \
     --env "RUNNER_ORG=$ORG" \
     --env "RUNNER_NAME=$name" \
     --env "RUNNER_LABELS=$labels" \
@@ -75,10 +91,10 @@ main() {
       # Resolve the mutable tag once per cycle; each new container is pinned to that immutable ID.
       if IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE")"; then
         for ((i=1; i<=CI_COUNT; i++)); do
-          ensure "gha-ci-$i" "self-hosted,linux,ARM64,ci" "$CI_CPUS" "$CI_MEMORY" || log "retrying gha-ci-$i next cycle"
+          ensure "$PREFIX-ci-$i" "$CI_LABELS" "$CI_CPUS" "$CI_MEMORY" "$ARTIFACTS_DIR" || log "retrying $PREFIX-ci-$i next cycle"
         done
         for ((i=1; i<=AGENT_COUNT; i++)); do
-          ensure "gha-agent-$i" "self-hosted,linux,ARM64,agent" "$AGENT_CPUS" "$AGENT_MEMORY" || log "retrying gha-agent-$i next cycle"
+          ensure "$PREFIX-agent-$i" "$AGENT_LABELS" "$AGENT_CPUS" "$AGENT_MEMORY" || log "retrying $PREFIX-agent-$i next cycle"
         done
       else
         log "runner image unavailable; retrying next cycle"

@@ -170,6 +170,38 @@ The plist names a path to a token file, never a token. The organisation needs a 
 `local-mac`, scoped to exactly the repositories that may use it. Without the group every repository
 in the organisation can schedule work on this Mac.
 
+### Linux host
+
+The same image and the same `pool.sh` run on a Linux machine under systemd instead of launchd. The
+first one is the OVH VPS: x64, so its CI slots answer to `self-hosted,linux,X64,ci` and never
+compete with the Mac's `ARM64` ones for a job; a repository picks a host by what its `RUNNER_CI`
+names. The Dockerfile reads `TARGETARCH`, so `docker build` on the host produces the x64 image.
+
+It differs from the Mac in one deliberate way: `GHA_RUNNER_ARTIFACTS_DIR` mounts a host directory
+into every CI container at `/ci-artifacts`. `design4pro/.github`'s `artifact-upload` and
+`artifact-download` actions write there when it exists, which keeps Playwright reports and coverage
+off GitHub's 2 GB storage allowance (exhausted in September 2026, 1488 GB-hours against about 1440).
+It is the only writable mount, it is not given to agent slots, and it holds data, never tools.
+
+```sh
+sudo useradd --system --create-home --home-dir /var/lib/gha-pool --groups docker gha-pool
+sudo install -d -m 700 -o gha-pool /etc/gha-runner
+printf '%s' '<PAT with manage_runners:org>' | sudo tee /etc/gha-runner/token >/dev/null
+sudo chown gha-pool /etc/gha-runner/token && sudo chmod 600 /etc/gha-runner/token
+sudo install -m 644 host/runner/pool.env.example /etc/gha-runner/pool.env   # then edit
+
+sudo docker build -t gha-runner:local host/runner
+# The store belongs to the uid the image's `runner` user got, so jobs can write to it.
+sudo install -d -m 750 -o "$(sudo docker run --rm --entrypoint id gha-runner:local -u)" /srv/ci-artifacts
+
+sed -e "s|__POOL_SH__|$PWD/host/runner/pool.sh|" -e "s|__USER__|gha-pool|" \
+    host/runner/gha-runner-pool.service | sudo tee /etc/systemd/system/gha-runner-pool.service >/dev/null
+sudo systemctl daemon-reload && sudo systemctl enable --now gha-runner-pool
+```
+
+Its runner group is `vps`, scoped like `local-mac` to the repositories that may use it. A daily
+systemd timer deletes `/srv/ci-artifacts/<repo>/<run>` directories older than 14 days.
+
 ### The kill switch
 
 Jobs assigned to the CI pool read an organisation variable with the pool as their default:
