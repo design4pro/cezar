@@ -73,10 +73,16 @@ RUN corepack enable \
  && corepack prepare pnpm@10.15.0 --activate \
  && chown -R runner:runner /opt/corepack
 
+# TARGETARCH comes from BuildKit: arm64 on the Mac, amd64 on the Linux host. The runner's release
+# assets spell the latter x64, which is the only translation needed - the base image is multi-arch.
 ARG RUNNER_VERSION=2.337.0
+ARG TARGETARCH
 WORKDIR /home/runner/actions-runner
-RUN curl -fsSL -o runner.tar.gz \
-      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz" \
+RUN case "${TARGETARCH:-$(dpkg --print-architecture)}" in \
+      amd64) arch=x64 ;; arm64) arch=arm64 ;; *) echo "unsupported arch: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o runner.tar.gz \
+      "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-${arch}-${RUNNER_VERSION}.tar.gz" \
  && tar xzf runner.tar.gz \
  && rm runner.tar.gz \
  && ./bin/installdependencies.sh \
