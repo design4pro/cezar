@@ -6,7 +6,7 @@ set -euo pipefail
 : "${RUNNER_NAME:?RUNNER_NAME is required}"
 : "${RUNNER_LABELS:?RUNNER_LABELS is required}"
 : "${RUNNER_REGISTRATION_TOKEN:?RUNNER_REGISTRATION_TOKEN is required}"
-RUNNER_GROUP="${RUNNER_GROUP:-local-mac}"
+RUNNER_GROUP="${RUNNER_GROUP:-vps}"
 
 cd /home/runner/actions-runner
 ./config.sh \

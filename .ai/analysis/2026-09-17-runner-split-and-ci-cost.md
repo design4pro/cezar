@@ -1,5 +1,7 @@
 # Runner split and CI cost — planned.travel and money-tracker.online
 
+> **Superseded 2026-09-24:** the Mac pool and Blacksmith runners were retired; CI runs only on the VPS pool. See `docs/host/README.md`, "The runner pool".
+
 Measured 2026-09-17 over the 30 days to that date, against the shared self-hosted
 pool (4 CI slots + 2 agent slots, one local macOS host) and GitHub's 3,000
 included minutes on the Team plan.
