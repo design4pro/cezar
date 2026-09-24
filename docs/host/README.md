@@ -179,8 +179,9 @@ Give it an expiry and track it: when it lapses, slots stop registering.
 ```sh
 sudo useradd --system --create-home --home-dir /var/lib/gha-pool --groups docker gha-pool
 sudo install -d -m 700 -o gha-pool /etc/gha-runner
-sudo install -m 600 -o gha-pool /dev/stdin /etc/gha-runner/token <<< '<classic PAT, admin:org>'
-sudo install -m 600 -o gha-pool host/runner/pool.env.example /etc/gha-runner/pool.env
+printf '%s' '<classic PAT with the full admin:org scope>' | sudo tee /etc/gha-runner/token >/dev/null
+sudo chown gha-pool /etc/gha-runner/token && sudo chmod 600 /etc/gha-runner/token
+sudo install -m 644 host/runner/pool.env.example /etc/gha-runner/pool.env   # then edit
 
 sudo docker build -t gha-runner:local host/runner
 sudo install -d -m 750 -o "$(sudo docker run --rm --entrypoint id gha-runner:local -u)" /srv/ci-artifacts
