@@ -186,7 +186,7 @@ It is the only writable mount, it is not given to agent slots, and it holds data
 ```sh
 sudo useradd --system --create-home --home-dir /var/lib/gha-pool --groups docker gha-pool
 sudo install -d -m 700 -o gha-pool /etc/gha-runner
-printf '%s' '<PAT with manage_runners:org>' | sudo tee /etc/gha-runner/token >/dev/null
+printf '%s' '<classic PAT with the full admin:org scope>' | sudo tee /etc/gha-runner/token >/dev/null
 sudo chown gha-pool /etc/gha-runner/token && sudo chmod 600 /etc/gha-runner/token
 sudo install -m 644 host/runner/pool.env.example /etc/gha-runner/pool.env   # then edit
 
