@@ -14,7 +14,7 @@
 # image did; it simply used to be spelled in ci.yml. See README, "Bumping the runner image".
 FROM mcr.microsoft.com/playwright:v1.62.1-noble
 
-# Node 24 and every browser Playwright supports on arm64 (Chromium and WebKit, which is what
+# Node 24 and the browsers Playwright ships (Chromium and WebKit are what
 # `devices['Desktop Chrome']`, `devices['iPhone 15']` and `devices['Desktop Safari']` resolve to -
 # neither repository pins a branded channel, so nothing here needs Chrome or Edge proper) arrive
 # with the base image, under PLAYWRIGHT_BROWSERS_PATH=/ms-playwright.
@@ -27,7 +27,7 @@ FROM mcr.microsoft.com/playwright:v1.62.1-noble
 # reading a workflow:
 #
 #   unzip  `anthropics/claude-code-action@v1` runs on Bun, and its `oven-sh/setup-bun` step
-#          downloads `bun-linux-aarch64.zip` and extracts it. Without unzip that step fails in two
+#          downloads a `bun-linux-*.zip` and extracts it. Without unzip that step fails in two
 #          seconds and the next one reports `bun: command not found`, which names neither the
 #          archive nor the missing tool (planned.travel run 34847597323).
 #   gh     `scripts/ci/review-threads-label.mjs` shells out to it, and so does
@@ -43,7 +43,7 @@ RUN apt-get update \
 
 # The GitHub CLI is not in Ubuntu's archive, so it comes from its own. Keyring and source list
 # rather than a release tarball: apt then carries the upgrade path, and the architecture is read
-# from dpkg instead of being hard-coded to arm64 here.
+# from dpkg instead of being hard-coded here.
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -73,8 +73,9 @@ RUN corepack enable \
  && corepack prepare pnpm@10.15.0 --activate \
  && chown -R runner:runner /opt/corepack
 
-# TARGETARCH comes from BuildKit: arm64 on the Mac, amd64 on the Linux host. The runner's release
-# assets spell the latter x64, which is the only translation needed - the base image is multi-arch.
+# TARGETARCH comes from BuildKit: amd64 on the VPS. The runner's release assets spell it x64, which
+# is the only translation needed; arm64 still maps through for an arm64 host. The base image is
+# multi-arch.
 ARG RUNNER_VERSION=2.337.0
 ARG TARGETARCH
 WORKDIR /home/runner/actions-runner
