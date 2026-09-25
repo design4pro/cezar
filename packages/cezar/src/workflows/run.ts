@@ -120,6 +120,20 @@ async function configuredModelProvider(
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
 /**
+ * A turn in flight that hears nothing from its runner for this long is hung: the agent CLI, or a
+ * tool call it is blocked on, stopped making progress. The parks are bounded (the idle timer, the
+ * monitoring wake) and a non-final step has its wall clock, but the in-flight turn of a final step
+ * (`timeoutMs: 0`) had no bound at all, so a hung one held its slot until cezar restarted:
+ * 8527e447 (2026-09-24) sat 46 minutes after `step-start` with no event. The longest legitimate
+ * silence in the run history is ~15 minutes (a validation gate inside one tool call).
+ */
+export const TURN_INACTIVITY_TIMEOUT_MS = 30 * 60_000;
+
+function turnStalledMessage(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  return `No agent activity for ${minutes >= 1 ? `${minutes}m` : `${Math.round(ms / 1000)}s`} during a turn: the agent or a tool it ran looks hung, so cezar stopped the session.`;
+}
+/**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
  * the session is closed right away instead of parking at `waiting` (#347).
@@ -332,6 +346,11 @@ interface ActiveRun {
   session?: AgentSession;
   currentStepId?: string;
   idleTimer?: NodeJS.Timeout;
+  /** Armed while a turn is in flight, pushed out by every runner event, cleared at turn end
+   *  (`armTurnWatchdog`). */
+  turnWatchdog?: NodeJS.Timeout;
+  /** Fails the live session as hung, through its agent step's own error path. */
+  onTurnStalled?: () => void;
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
@@ -999,6 +1018,7 @@ export class RunManager {
   /** The workspace-registry id of this manager's project — what a dispatched agent's `cez task`
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
+  private readonly turnInactivityMs: number;
 
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
@@ -1015,9 +1035,12 @@ export class RunManager {
        * reach an agent. Secrets are registered with RunStore before any output arrives.
        */
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+      /** `TURN_INACTIVITY_TIMEOUT_MS` unless a test needs it short. */
+      turnInactivityMs?: number;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.turnInactivityMs = options.turnInactivityMs ?? TURN_INACTIVITY_TIMEOUT_MS;
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
@@ -1755,6 +1778,7 @@ export class RunManager {
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
+    if (state) this.clearTurnWatchdog(state);
     this.active.delete(runId);
     // Session result has settled and its sink has flushed before terminal cleanup.
     this.store.clearRunSecrets(runId);
@@ -1940,6 +1964,7 @@ export class RunManager {
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
+    this.armTurnWatchdog(state);
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
@@ -3204,6 +3229,7 @@ export class RunManager {
       for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
+      this.armTurnWatchdog(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
       this.leaveMonitoring(runId);
@@ -3547,6 +3573,8 @@ export class RunManager {
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
+      if (event.type === 'turn-end' || event.type === 'error') this.clearTurnWatchdog(state);
+      else this.touchTurnWatchdog(state);
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) this.store.appendEvent(runId, { type: 'image', stepId, ...saved });
@@ -3828,6 +3856,8 @@ export class RunManager {
     );
     state.session = session;
     state.sessionEverOpened = true;
+    state.onTurnStalled = () => onEvent({ type: 'error', message: turnStalledMessage(this.turnInactivityMs) });
+    this.armTurnWatchdog(state);
     this.flushDeferred(runId);
     state.interrupt = () => session.interrupt();
     // A Cancel during the awaits above found `interrupt` still a no-op and only set the flag.
@@ -4327,6 +4357,8 @@ export class RunManager {
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
+      if (event.type === 'turn-end' || event.type === 'error') this.clearTurnWatchdog(state);
+      else this.touchTurnWatchdog(state);
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
@@ -4652,6 +4684,8 @@ export class RunManager {
     }
     state.session = session;
     state.sessionEverOpened = true;
+    state.onTurnStalled = () => onEvent({ type: 'error', message: turnStalledMessage(this.turnInactivityMs) });
+    this.armTurnWatchdog(state);
     this.flushDeferred(runId);
     state.currentStepId = step.id;
     state.interrupt = () => session.interrupt();
@@ -4677,6 +4711,8 @@ export class RunManager {
     } finally {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
+      this.clearTurnWatchdog(state);
+      state.onTurnStalled = undefined;
       this.leaveMonitoring(runId);
       this.waiting.delete(runId);
       this.clearMonitoringWakeTimer(state, runId);
@@ -4707,8 +4743,10 @@ export class RunManager {
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
+    if (event.type !== 'ask.requested') this.touchTurnWatchdog(state);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
+    this.clearTurnWatchdog(state);
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
@@ -5185,6 +5223,7 @@ export class RunManager {
       return false;
     }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
+    this.armTurnWatchdog(state);
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
@@ -5219,6 +5258,32 @@ export class RunManager {
       }
     }, IDLE_TIMEOUT_MS);
     state.idleTimer.unref?.();
+  }
+
+  /**
+   * Start (or restart) the bound on an in-flight turn: a session opening or a message sent into
+   * it. Fires `onTurnStalled` when no runner event arrives within `turnInactivityMs`; a turn end
+   * or an error clears it, so a parked run is never touched.
+   */
+  private armTurnWatchdog(state: ActiveRun): void {
+    this.clearTurnWatchdog(state);
+    state.turnWatchdog = setTimeout(() => {
+      state.turnWatchdog = undefined;
+      if (state.session?.open && !state.cancelled) state.onTurnStalled?.();
+    }, this.turnInactivityMs);
+    state.turnWatchdog.unref?.();
+  }
+
+  /** A runner event is progress: push the bound out, but only while a turn is in flight. */
+  private touchTurnWatchdog(state: ActiveRun): void {
+    if (state.turnWatchdog) this.armTurnWatchdog(state);
+  }
+
+  private clearTurnWatchdog(state: ActiveRun): void {
+    if (state.turnWatchdog) {
+      clearTimeout(state.turnWatchdog);
+      state.turnWatchdog = undefined;
+    }
   }
 
   private clearIdleTimer(state: ActiveRun): void {
