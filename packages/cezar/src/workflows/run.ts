@@ -13,6 +13,7 @@ import {
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
+import { reapRunProcesses } from '../core/run-reaper.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
@@ -1760,6 +1761,21 @@ export class RunManager {
     // terminal path. Fire-and-forget: retention must never delay or throw into
     // the lifecycle.
     void this.enforceRetention();
+    // Whatever the agent started and left running (a `wrangler dev`, a vitest pool's `workerd`)
+    // goes on the same terminal transition: nothing else ever stops it, and it keeps its memory
+    // until the cockpit itself restarts. Matched by the run's CEZ_TASK_ID, see `run-reaper.ts`.
+    // Like retention, it must never throw into the lifecycle.
+    try {
+      const reaped = reapRunProcesses(runId);
+      if (reaped.length > 0) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          message: `stopped ${reaped.length} process${reaped.length === 1 ? '' : 'es'} the run left running (pid ${reaped.join(', ')})`,
+        });
+      }
+    } catch {
+      // the run's event file is gone (its project was removed mid-settle): nothing left to tell
+    }
     // The run's temp directory (#785) goes on the same terminal transition, and
     // unconditionally — it is scratch, not an artifact, so unlike a worktree
     // there is no keep-count to respect and nothing left to recover from it. A
