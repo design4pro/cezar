@@ -280,7 +280,7 @@ export class ClaudeCliRunner implements AgentRunner {
           }
           const denials = msg.type === 'result' && Array.isArray(msg.permission_denials) ? msg.permission_denials : [];
           // A denied turn that still finished (the caller's `settlesDeniedTurn`, e.g. it ended
-          // with `CEZ:DONE`) ends normally, flagged; any other denied turn stops the session.
+          // with `CEZ:DONE` or recorded a `done` report) ends normally, flagged; any other denied turn stops the session.
           const deniedTurnSettles = denials.length > 0 && opts.settlesDeniedTurn?.(textChunks.slice(turnStart).join('\n')) === true;
           if (denials.length > 0 && !deniedTurnSettles) {
             permissionDenied = true;
@@ -290,7 +290,7 @@ export class ClaudeCliRunner implements AgentRunner {
             continue;
           }
           if (deniedTurnSettles) {
-            onEvent?.({ type: 'note', message: `Permission denied: ${describeDenials(denials)}. The turn still ended with its turn-end marker, so it settles on it; the denied calls did not run.` });
+            onEvent?.({ type: 'note', message: `Permission denied: ${describeDenials(denials)}. The turn still finished (a turn-end marker or a done report), so it settles on that; the denied calls did not run.` });
           }
           if (msg.type === 'result') {
             turnStart = textChunks.length;
