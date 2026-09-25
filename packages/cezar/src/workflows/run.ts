@@ -3726,6 +3726,8 @@ export class RunManager {
     state.sessionEverOpened = true;
     this.flushDeferred(runId);
     state.interrupt = () => session.interrupt();
+    // A Cancel during the awaits above found `interrupt` still a no-op and only set the flag.
+    if (state.cancelled) session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
     const finishedAt = () => new Date().toISOString();
@@ -4541,6 +4543,8 @@ export class RunManager {
     this.flushDeferred(runId);
     state.currentStepId = step.id;
     state.interrupt = () => session.interrupt();
+    // A Cancel during the awaits above found `interrupt` still a no-op and only set the flag.
+    if (state.cancelled) session.interrupt();
     if (session.pid !== undefined) registerRunProcess(runId, session.pid);
 
     try {
