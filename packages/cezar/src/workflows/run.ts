@@ -138,6 +138,15 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
  */
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
 /**
+ * A permission-denied turn settles instead of failing the run only when the agent finished it
+ * anyway: it ended with `CEZ:DONE`, or with a valid `CEZ:ASK` for the user (spec
+ * 2026-09-10-dispatch). Anything else - `CEZ:MONITORING`, no marker - still ends the session
+ * with the permission error. Both `startSession` calls pass this as `settlesDeniedTurn`.
+ */
+function settlesDeniedTurn(turnText: string): boolean {
+  return DONE_MARKER_RE.test(turnText.trimEnd()) || parseAskMarker(turnText) !== null;
+}
+/**
  * Trailing task-reference marker lines — `CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`
  * (spec 2026-07-18-task-ref-markers), whole lines, at the very end of the turn.
  *
@@ -3555,10 +3564,14 @@ export class RunManager {
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
+        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
+        // monitoring park and no nudge below, so nothing continues it after the denial.
+        const denied = event.permissionDenied === true;
         const monitoring =
           sessionOpen &&
           !done &&
           !ask &&
+          !denied &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
@@ -3576,7 +3589,7 @@ export class RunManager {
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
         const autoContinued =
-          dispatchTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false);
+          dispatchTurn.rePrompted || (sessionOpen && !denied ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false);
         if (sessionOpen) {
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
@@ -3763,7 +3776,7 @@ export class RunManager {
         timeoutMs: 0,
       },
       onEvent,
-      { onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event) },
+      { onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event), settlesDeniedTurn },
     );
     state.session = session;
     state.sessionEverOpened = true;
@@ -4346,11 +4359,15 @@ export class RunManager {
         const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
+        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
+        // monitoring park and no nudge below, so nothing continues it after the denial.
+        const denied = event.permissionDenied === true;
         const monitoring =
           interactive &&
           sessionOpen &&
           !done &&
           !ask &&
+          !denied &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
@@ -4382,7 +4399,7 @@ export class RunManager {
         // the second ask. For every non-autonomous run `tryAutonomousNudge` returns at its first
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
-          dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
+          dispatchTurn.rePrompted || (waiting && !denied ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
         if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -4576,6 +4593,7 @@ export class RunManager {
           // the user's answer rather than have the runner close it first (#917).
           autoEndAfterFirstTurn: false,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+          settlesDeniedTurn,
         },
       );
     } catch (err) {

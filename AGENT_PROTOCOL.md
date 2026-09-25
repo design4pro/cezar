@@ -156,7 +156,7 @@ type AgentEvent =
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
-  | { type: 'turn-end' }
+  | { type: 'turn-end'; permissionDenied?: true }             // claude: a denied turn the caller settled
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };

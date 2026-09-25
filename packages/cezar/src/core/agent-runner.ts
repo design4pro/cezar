@@ -145,7 +145,9 @@ export type AgentEvent =
    *  sessions mint their own id, so the run manager persists this to enable
    *  resume ("Continue") and "open in CLI". Claude's equals `spec.sessionId`. */
   | { type: 'session'; sessionId: string }
-  | { type: 'turn-end' }
+  /** `permissionDenied`: the turn's result carried permission denials, and the caller's
+   *  `settlesDeniedTurn` let it end anyway (claude only). The turn must not be continued. */
+  | { type: 'turn-end'; permissionDenied?: true }
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
@@ -174,6 +176,10 @@ export interface SessionOptions {
    *  ALONGSIDE the v1 `AgentEvent`s (additive — v1 keeps flowing unchanged).
    *  RunManager consumption lands in R2 step 2.1. */
   onUiEvent?: (event: UiEvent) => void;
+  /** A turn whose result carries permission denials ends the session with an error. When
+   *  this returns true for that turn's own text, the turn ends normally instead, flagged
+   *  `permissionDenied` (spec 2026-09-10-dispatch). Only claude reports denials. */
+  settlesDeniedTurn?: (turnText: string) => boolean;
 }
 
 /**
