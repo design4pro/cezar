@@ -411,6 +411,15 @@ export function buildClaudeArgs(
     }
   }
   const allowed = buildAllowedTools(spec.allowedTools ?? [], spec.bashAllowlist);
+  // The dispatch contract (dispatch/prompts.ts) tells every run in a tree to write its notes and
+  // its inbox messages into the tree directory. A grant without Write (a `cez task create --tools`
+  // order, a narrow workflow step) denies that under dontAsk, so allow file writes there and
+  // nowhere else. It has to be an `Edit(//<abs>/**)` rule: claude applies a path-scoped Edit rule
+  // to Write, while a `Write(<path>)` rule and a plain `Edit` both leave Write denied.
+  const treeDir = spec.env?.CEZ_TREE_DIR;
+  if (treeDir && allowed.length > 0 && !allowed.includes('Write')) {
+    allowed.push(`Edit(/${treeDir}/**)`);
+  }
   if (allowed.length > 0) {
     args.push('--allowedTools', allowed.join(','));
   }
