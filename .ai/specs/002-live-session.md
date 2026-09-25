@@ -84,3 +84,18 @@ skończonej turze sesja chwilę czeka, zamiast umierać.
 - Wklejony screenshot jest opisywalny przez agenta („co widzisz na obrazku?").
 - Po restarcie serwera taski `waiting` są odzyskiwane jako `failed —
   interrupted` (jak dziś running) — bez zombie.
+
+## Amendment 2026-09-25: in-flight turn watchdog
+
+The idle timeout bounds a PARKED session only. The turn of the last agent step runs with
+`timeoutMs: 0`, so a turn that hung (the CLI, or a tool call it was blocked on) had no bound and
+held its slot until cezar restarted: 8527e447 (2026-09-24) sat 46 minutes after `step-start`
+without one event.
+
+`RunManager` now arms `TURN_INACTIVITY_TIMEOUT_MS` (30 min) whenever a turn starts: a session
+opening, or a message sent into it (a user message, a monitoring wake, an inbox digest, the
+autonomous nudge). Every runner event (`onEvent` or `onUiEvent`) pushes it out; `turn-end`, an
+error and a native ask clear it, so `waiting` and `monitoring` parks keep their own bounds. When it
+fires, the step's own error path runs with "No agent activity for 30m during a turn…": the session
+is interrupted and the run settles `failed` with its Continue button. The longest legitimate
+silence in the run history is ~15 minutes (a validation gate inside one tool call).
