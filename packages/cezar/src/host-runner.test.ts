@@ -45,7 +45,7 @@ describe('host runner reconciliation', () => {
     expect(output).toContain('RETRY');
     if (failure !== 'run') expect(output).not.toContain('run --detach');
   });
-  it('declares ci, gate and agent slots, mounting the artifact store on ci slots only', () => {
+  it('declares ci and agent slots, mounting the artifact store on ci slots only', () => {
     const output = execFileSync('bash', ['-c', `
       exec 2>&1
       source "$1"
@@ -61,15 +61,13 @@ describe('host runner reconciliation', () => {
     `, 'test', pool], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     const runs = output.split('\n').filter((line) => line.startsWith('RUN '));
     const slot = (name: string) => runs.find((line) => line.includes(`--name ${name} `)) ?? '';
-    expect(runs).toHaveLength(4);
+    expect(runs).toHaveLength(3);
     for (const name of ['vps-ci-1', 'vps-ci-2']) {
       expect(slot(name)).toContain('RUNNER_LABELS=self-hosted,linux,X64,ci');
       expect(slot(name)).toContain('--cpus 4 --memory 8g');
       expect(slot(name)).toContain('--volume /srv/ci-artifacts:/ci-artifacts');
     }
-    expect(slot('vps-gate-1')).toContain('RUNNER_LABELS=self-hosted,linux,X64,gate');
-    expect(slot('vps-gate-1')).toContain('--cpus 1 --memory 2g');
-    expect(slot('vps-gate-1')).not.toContain('--volume');
+    expect(slot('vps-gate-1')).toBe('');
     expect(slot('vps-agent-1')).toContain('RUNNER_LABELS=self-hosted,linux,X64,agent');
     expect(slot('vps-agent-1')).not.toContain('--volume');
     expect(runs.every((line) => line.includes('RUNNER_GROUP=vps'))).toBe(true);

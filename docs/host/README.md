@@ -135,20 +135,23 @@ Docker access remains a trusted host capability. `--ephemeral` deregisters a run
 `--replace` repairs a registration after a crash. A failed registration, launch, daemon connection or
 removal retries next cycle.
 
-### The three pools
+### The two pools
 
 | Pool | Labels | Slots | CPU / memory | Mounts | Runs |
 | --- | --- | --- | --- | --- | --- |
-| ci | `self-hosted,linux,X64,ci` | 2 | 4 / 8g | `/srv/ci-artifacts` → `/ci-artifacts` | build, unit, e2e, a11y, deploys, rollback |
-| gate | `self-hosted,linux,X64,gate` | 1 | 1 / 2g | none | merge gates, governance, auto-merge, promotion |
+| ci | `self-hosted,linux,X64,ci` | 2 | 4 / 8g | `/srv/ci-artifacts` → `/ci-artifacts` | build, unit, e2e, a11y, deploys, rollback, promotion |
 | agent | `self-hosted,linux,X64,agent` | 1 | 2 / 4g | none | sentry-triage |
 
 The sizes are measured, not guessed. One of these vCPUs does about a third of the work of an
 Apple-silicon core: three CI slots of three CPUs cut planned.travel's e2e shards off at their 900 s
-budget, two slots of four finish them in 10-13 min. The gate pool exists because its jobs take
-seconds and, sharing CI slots, they queued behind 15-minute e2e shards and held every pull request
-with them. gate and agent oversubscribe the eight cores on purpose; they are idle or network-bound
-almost all of the time.
+budget, two slots of four finish them in 10-13 min. agent oversubscribes the eight cores on
+purpose; it is idle or network-bound almost all of the time.
+
+A third pool, `gate` (one slot of 1 CPU / 2g), ran the seconds-long merge-gate, auto-merge and
+promotion jobs so they did not queue behind e2e shards. It was retired on 2026-09-25: the merge-gate
+and auto-merge workflows were deleted and promotion moved to `ci`. A host whose `pool.env` still
+sets `GHA_RUNNER_GATE_*` ignores them; stop and remove an existing `vps-gate-1` and delete its
+registration as described below.
 
 The CPU quota also sizes the jobs themselves: Node's `os.availableParallelism()` reports the quota,
 so vitest starts that many workers, not one per host core. Swap equal to memory means an over-budget
