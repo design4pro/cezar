@@ -12,6 +12,7 @@ import {
   type AskRequest,
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
+import { claudeSessionSaved } from '../core/claude-sessions.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { reapRunProcesses } from '../core/run-reaper.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
@@ -3404,6 +3405,21 @@ export class RunManager {
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
+    // A claude session the CLI never saved (it was killed before its first turn, e.g. by a
+    // cezar restart) cannot be resumed: `--resume` exits "No conversation found". Continue it as
+    // a fresh session under a new id instead, with the portable context below. The dry-run mock
+    // saves no transcripts, so there is nothing to check under it.
+    let unsavedSessionId: string | undefined;
+    let freshSessionId: string | undefined;
+    if (sessionId !== undefined && backend === 'claude' && process.env.CEZ_DRY_RUN !== '1') {
+      const ownerProfileId = record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+      const { profile } = await resolveProfileEnvForRoot(this.repoRoot, 'claude', ownerProfileId);
+      if (!claudeSessionSaved(profile.path, sessionId)) {
+        unsavedSessionId = sessionId;
+        sessionId = undefined;
+        freshSessionId = randomUUID();
+      }
+    }
     // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
     // portable context from Cezar's durable record + redacted event stream before this new turn's
     // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
@@ -3480,10 +3496,17 @@ export class RunManager {
       status: 'running',
       iterations: 1,
       startedAt: new Date().toISOString(),
-      sessionId,
+      sessionId: sessionId ?? freshSessionId,
       backend,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
+    if (unsavedSessionId) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `claude never saved session ${unsavedSessionId}, so it cannot be resumed — starting a fresh session with the run's context instead`,
+      });
+    }
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
     // message (#357): persisted to the run's own attachment store so the thread renders the
     // bubble's images rather than a bare count, and handed to the agent as absolute paths
@@ -3687,10 +3710,12 @@ export class RunManager {
     }
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
-    // been switched to since. The owning step is the one carrying this session id.
-    const owningStep = sessionId === undefined
+    // been switched to since. The owning step is the one carrying this session id. A session
+    // claude never saved still names its owner: the fresh session keeps that account and tools.
+    const ownerSessionId = sessionId ?? unsavedSessionId;
+    const owningStep = ownerSessionId === undefined
       ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId);
+      : record?.steps.find((s) => s.sessionId === ownerSessionId);
     const resumedProfileId = owningStep?.profileId;
     // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
     // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
@@ -3704,7 +3729,7 @@ export class RunManager {
     // keeps today's defaults.
     const defSteps = record?.workflowDef?.steps;
     const toolsStep =
-      defSteps === undefined || (sessionId !== undefined && owningStep === undefined)
+      defSteps === undefined || (ownerSessionId !== undefined && owningStep === undefined)
         ? undefined
         : defSteps.find((s) => s.id === owningStep?.id)
           ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
@@ -3771,7 +3796,7 @@ export class RunManager {
         ),
         env: continueProfile.env,
         model: continueModel,
-        sessionId,
+        sessionId: sessionId ?? freshSessionId,
         resume: sessionId !== undefined,
         timeoutMs: 0,
       },
