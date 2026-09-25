@@ -389,6 +389,34 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(readFileSync(join(treeDirOf(parent.id), 'units', child.id.slice(0, 8), 'report.md'), 'utf8')).toContain('"status": "done"');
     }, 60_000);
 
+    // ad05ec7c (2026-09-25): a reviewer whose Write was denied sent `cez task report --status done`
+    // and ended the turn with no marker; the denial failed it. A done report settles it like CEZ:DONE.
+    const deniedWithReport = async (status: 'done' | 'partial'): Promise<RunRecord> => {
+      const parent = await parkedRoot();
+      const child = start('mock:pause mock:denied review the drafts', childOf(parent.id));
+      await waitFor(child.id, (r) => r?.status === 'running');
+      manager.recordReport(child.id, { status, result: 'reviewed', evidence: [], side_effects: [], errors: [], suggestions: [] });
+      await waitFor(child.id, settled, 40_000);
+      return store.getRun(child.id)!;
+    };
+    const deniedErrors = (id: string) =>
+      store
+        .readEvents(id)
+        .filter((event) => event.type === 'error' && String((event as { message?: unknown }).message).startsWith('Permission denied'));
+
+    it('settles a denied turn that recorded a done report, like CEZ:DONE', async () => {
+      const child = await deniedWithReport('done');
+      expect(child.status).not.toBe('failed');
+      expect(deniedErrors(child.id)).toEqual([]);
+      expect(notes(child.id).some((n) => n.startsWith('Permission denied: Edit .claude/settings.json'))).toBe(true);
+    }, 60_000);
+
+    it('still fails a denied turn whose report is not done', async () => {
+      const child = await deniedWithReport('partial');
+      expect(child.status).toBe('failed');
+      expect(deniedErrors(child.id)).toHaveLength(1);
+    }, 60_000);
+
     it('refuses a report from a run outside any tree', () => {
       const plain = store.createRun({ title: 'plain', workflow: 'quick-task', task: 't', steps: [] });
       expect(manager.recordReport(plain.id, { status: 'done', result: 'x', evidence: [], side_effects: [], errors: [], suggestions: [] })).toBe(false);

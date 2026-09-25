@@ -140,12 +140,24 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
 /**
  * A permission-denied turn settles instead of failing the run only when the agent finished it
- * anyway: it ended with `CEZ:DONE`, or with a valid `CEZ:ASK` for the user (spec
- * 2026-09-10-dispatch). Anything else - `CEZ:MONITORING`, no marker - still ends the session
- * with the permission error. Both `startSession` calls pass this as `settlesDeniedTurn`.
+ * anyway: it ended with `CEZ:DONE`, with a valid `CEZ:ASK` for the user, or it recorded a `done`
+ * report during the turn (`cez task report --status done`, spec 2026-09-10-dispatch). Anything
+ * else - `CEZ:MONITORING`, no marker - still ends the session with the permission error. Both
+ * `startSession` calls pass this as `settlesDeniedTurn`.
  */
-function settlesDeniedTurn(turnText: string): boolean {
-  return DONE_MARKER_RE.test(turnText.trimEnd()) || parseAskMarker(turnText) !== null;
+function settlesDeniedTurn(turnText: string, reportedDone: boolean): boolean {
+  return reportedDone || DONE_MARKER_RE.test(turnText.trimEnd()) || parseAskMarker(turnText) !== null;
+}
+
+/**
+ * Whether a finished turn closes the session as done: it ended with `CEZ:DONE`, or it was a denied
+ * turn the runner settled on its `done` report. Reads and clears `reportedDoneThisTurn`, so call it
+ * exactly once per turn end.
+ */
+function turnIsDone(state: ActiveRun, turnText: string, denied: boolean): boolean {
+  const reportedDone = state.reportedDoneThisTurn === true;
+  state.reportedDoneThisTurn = false;
+  return DONE_MARKER_RE.test(turnText.trimEnd()) || (denied && reportedDone);
 }
 /**
  * Trailing task-reference marker lines — `CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`
@@ -379,6 +391,10 @@ interface ActiveRun {
   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
    *  monitor for the children it just created. */
   dispatchedThisTurn?: boolean;
+  /** Set by `recordReport` when a `done` report arrives during a turn, read and cleared at that
+   *  turn's end (`turnIsDone`): a permission-denied turn that reported `done` settles like
+   *  `CEZ:DONE`. */
+  reportedDoneThisTurn?: boolean;
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
@@ -2169,9 +2185,11 @@ export class RunManager {
   recordReport(runId: string, report: DispatchReport): boolean {
     if (!this.dispatchOf(runId)) return false;
     this.updateDispatch(runId, (current) => ({ ...current, report }));
+    const state = this.active.get(runId);
+    if (state && report.status === 'done') state.reportedDoneThisTurn = true;
     this.store.appendEvent(runId, {
       type: 'note',
-      stepId: this.active.get(runId)?.currentStepId,
+      stepId: state?.currentStepId,
       message: `report recorded — status ${report.status}${report.verdict ? `, verdict ${report.verdict}` : ''}`,
     });
     return true;
@@ -3569,7 +3587,12 @@ export class RunManager {
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
-        const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
+        // monitoring park and no nudge below, so nothing continues it after the denial. One that
+        // recorded a `done` report closes like `CEZ:DONE`.
+        const denied = event.permissionDenied === true;
+        const finished = turnIsDone(state, turnText, denied);
+        const done = sessionOpen && finished;
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
@@ -3587,9 +3610,6 @@ export class RunManager {
         // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
         // children, not on the user, and it has to surrender its slot to them. An over-budget run
         // parks `waiting` instead, whatever it asked for (Q6 ii).
-        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
-        // monitoring park and no nudge below, so nothing continues it after the denial.
-        const denied = event.permissionDenied === true;
         const monitoring =
           sessionOpen &&
           !done &&
@@ -3801,7 +3821,10 @@ export class RunManager {
         timeoutMs: 0,
       },
       onEvent,
-      { onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event), settlesDeniedTurn },
+      {
+        onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
+        settlesDeniedTurn: (turnText) => settlesDeniedTurn(turnText, state.reportedDoneThisTurn === true),
+      },
     );
     state.session = session;
     state.sessionEverOpened = true;
@@ -4344,7 +4367,12 @@ export class RunManager {
         turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
-        const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
+        // monitoring park and no nudge below, so nothing continues it after the denial. One that
+        // recorded a `done` report closes like `CEZ:DONE`.
+        const denied = event.permissionDenied === true;
+        const finished = turnIsDone(state, turnText, denied);
+        const done = interactive && sessionOpen && finished;
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
@@ -4384,9 +4412,6 @@ export class RunManager {
         const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
-        // A denied turn the runner let settle (`settlesDeniedTurn`) waits for the user: no
-        // monitoring park and no nudge below, so nothing continues it after the denial.
-        const denied = event.permissionDenied === true;
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -4618,7 +4643,7 @@ export class RunManager {
           // the user's answer rather than have the runner close it first (#917).
           autoEndAfterFirstTurn: false,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
-          settlesDeniedTurn,
+          settlesDeniedTurn: (turnText) => settlesDeniedTurn(turnText, state.reportedDoneThisTurn === true),
         },
       );
     } catch (err) {
