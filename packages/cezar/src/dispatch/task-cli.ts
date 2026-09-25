@@ -24,7 +24,7 @@ export interface TaskCliIo {
 const USAGE = `cez task — dispatch cezar tasks from inside a task (on by default; CEZ_DISPATCH=0 on the cockpit turns it off)
 
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
-                  [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
+                  [--scope "…"] [--write-repository owner/repo --write-number <number>] [--write-path <relative-path>] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
                   [--runner claude|codex|opencode] [--model <model>] [--retry-limit <0-3>]
   cez task report --status done|partial|failed|blocked --result "…" [--evidence "…"]…
                   [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
@@ -88,6 +88,9 @@ export async function runTaskCommand(
             kind: { type: 'string' },
             'review-of': { type: 'string', multiple: true },
             scope: { type: 'string' },
+            'write-repository': { type: 'string' },
+            'write-number': { type: 'string' },
+            'write-path': { type: 'string', multiple: true },
             budget: { type: 'string' },
             success: { type: 'string' },
             evidence: { type: 'string' },
@@ -100,8 +103,15 @@ export async function runTaskCommand(
         const objective = positionals.join(' ').trim();
         if (!objective) throw new Error('an objective is required: cez task create "<objective>"');
         if (!env.CEZ_TASK_ID) throw new Error('CEZ_TASK_ID is not set — only a running task can dispatch');
+        if (Boolean(values['write-repository']) !== Boolean(values['write-number'])) {
+          throw new Error('--write-repository and --write-number must be supplied together');
+        }
         const body = {
           objective,
+          ...(values['write-path'] ? { writePaths: values['write-path'] } : {}),
+          ...(values['write-repository'] ? { writeTarget: {
+            repository: values['write-repository'], number: number(values['write-number'], 'write-number'),
+          } } : {}),
           ...(values.title ? { title: values.title } : {}),
           ...(values.kind ? { kind: values.kind } : {}),
           ...(values['review-of']?.length ? { review_of: values['review-of'] } : {}),

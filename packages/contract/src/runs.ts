@@ -7,7 +7,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
-import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+import { dispatchIntentSchema, dispatchSchema, writeTargetSchema, writePathsSchema } from './dispatch.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -205,6 +205,8 @@ export const runRecordSchema = z.object({
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
    * always has.
    */
+  writeTarget: writeTargetSchema.optional(),
+  writePaths: writePathsSchema.optional(),
   dispatch: dispatchSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
@@ -909,6 +911,8 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    writeTarget: writeTargetSchema.optional(),
+    writePaths: writePathsSchema.optional(),
   });
 
 /**

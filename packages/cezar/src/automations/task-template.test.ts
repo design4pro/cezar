@@ -47,16 +47,16 @@ describe('automation task templates', () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-template-account-'));
     try {
       const store = RunStore.open(join(root, '.ai/cezar'));
-      const inputs: Array<{ agentProfile?: string }> = [];
+      const inputs: Array<{ agentProfile?: string; writeTarget?: { repository: string; number: number } }> = [];
       const manager = {
-        startRun: (workflow: { name: string; steps: [] }, input: { task: string; agentProfile?: string }) => {
-          inputs.push({ agentProfile: input.agentProfile });
+        startRun: (workflow: { name: string; steps: [] }, input: { task: string; agentProfile?: string; writeTarget?: { repository: string; number: number } }) => {
+          inputs.push({ agentProfile: input.agentProfile, writeTarget: input.writeTarget });
           return store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, steps: [] });
         },
       } as unknown as RunManager;
       const task = { ...definition.task, workflow: 'quick-task', agentProfile: 'work' };
       await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'receipt' });
-      expect(inputs).toEqual([{ agentProfile: 'work' }]);
+      expect(inputs).toEqual([{ agentProfile: 'work', writeTarget: { repository: 'acme/demo', number: 7 } }]);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 

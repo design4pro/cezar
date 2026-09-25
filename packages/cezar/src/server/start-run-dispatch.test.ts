@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -21,6 +22,7 @@ describe('POST /runs and the dispatch intent', () => {
   let store: RunStore;
   let app: Hono;
   let inputs: StartRunInput[];
+  let targetConflict: string | undefined;
   const savedFlag = process.env.CEZ_DISPATCH;
 
   beforeEach(() => {
@@ -28,8 +30,10 @@ describe('POST /runs and the dispatch intent', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     inputs = [];
+    targetConflict = undefined;
     delete process.env.CEZ_DISPATCH;
     const manager = {
+      writeTargetConflict: () => targetConflict,
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         inputs.push(input);
         return store.createRun({ title: 't', workflow: 'quick-task', task: input.task, steps: [] });
@@ -52,6 +56,36 @@ describe('POST /runs and the dispatch intent', () => {
     const res = await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 'split this', dispatch: { maxSubtasks: 10, inFlight: 2, model: 'sonnet' } });
     expect(res.status).toBe(201);
     expect(inputs[0]?.dispatchIntent).toEqual({ maxSubtasks: 10, inFlight: 2, model: 'sonnet' });
+  });
+
+  it('passes declared ownership and write scope, and returns 409 without starting a conflicting run', async () => {
+    const body = { steps: [{ id: 'work', prompt: '{{task}}' }], task: 'fix', writeTarget: { repository: 'acme/demo', number: 671 }, writePaths: ['.claude/hooks/guard.sh'] };
+    expect((await post(body)).status).toBe(201);
+    expect(inputs[0]).toMatchObject({ writeTarget: body.writeTarget, writePaths: body.writePaths });
+    targetConflict = 'owned by run other';
+    expect((await post(body)).status).toBe(409);
+    expect(inputs).toHaveLength(1);
+  });
+
+  it('claims the manual composer PR argument and rejects a second request without typed metadata', async () => {
+    execFileSync('git', ['init', '-q', repoRoot]);
+    execFileSync('git', ['-C', repoRoot, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-qm', 'initial']);
+    execFileSync('git', ['-C', repoRoot, 'remote', 'add', 'origin', 'https://github.com/acme/demo.git']);
+    mkdirSync(join(repoRoot, '.ai/cezar/workflows'), { recursive: true });
+    writeFileSync(join(repoRoot, '.ai/cezar/workflows/pr-fix.yml'), "name: pr-fix\nsteps:\n  - id: fix\n    prompt: '/om-auto-fix-pr {{task}}'\n");
+    const body = { workflow: 'pr-fix', task: '671' };
+    expect((await post(body)).status).toBe(201);
+    expect(inputs[0]?.writeTarget).toEqual({ repository: 'acme/demo', number: 671 });
+    targetConflict = 'owned by first run';
+    expect((await post(body)).status).toBe(409);
+    expect(inputs).toHaveLength(1);
+  });
+
+  it('fails closed for a PR skill without an explicit argument, while ordinary tasks still start', async () => {
+    expect((await post({ steps: [{ id: 'fix', skill: 'om-auto-fix-pr' }], task: 'fix the review' })).status).toBe(400);
+    expect((await post({ steps: [{ id: 'fix', prompt: '/om-auto-review-pr {{task}}' }], task: 'mentioned #671 in prose' })).status).toBe(400);
+    expect(inputs).toHaveLength(0);
+    expect((await post({ steps: [{ id: 'work', prompt: '{{task}}' }], task: 'ordinary task' })).status).toBe(201);
   });
 
   it('the bare toggle is an empty intent, and no toggle is no intent', async () => {

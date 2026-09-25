@@ -109,6 +109,18 @@ export const dispatchSchema = z.object({
 export type RunDispatch = z.infer<typeof dispatchSchema>;
 export type DispatchPendingAsk = NonNullable<RunDispatch['pendingAsk']>;
 
+/** Explicit tracker mutation scope; never inferred from a task title or prompt. */
+export const writeTargetSchema = z.object({
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  number: z.number().int().positive(),
+});
+/** Repository-relative paths the task explicitly intends to change. */
+export const writePathsSchema = z.array(z.string().min(1).max(1000).refine(
+  (path) => !path.startsWith('/') && !path.includes('\\') && !path.split('/').includes('..'),
+  'write paths must stay relative to the worktree',
+)).max(100);
+export type WriteTarget = z.infer<typeof writeTargetSchema>;
+
 /**
  * `POST /runs/:id/dispatch` — the task order for ONE child. `.strict()`: an unknown key here is a
  * brake that did not fire (a misspelled `max_cost` would spawn an uncapped child).
@@ -117,6 +129,8 @@ export const dispatchInputSchema = z
   .object({
     title: z.string().min(1).max(120).optional(),
     objective: z.string().min(1).max(4000),
+    writeTarget: writeTargetSchema.optional(),
+    writePaths: writePathsSchema.optional(),
     kind: dispatchKindSchema.optional(),
     review_of: z.array(z.string().max(120)).max(8).optional(),
     scope: z.string().max(1000).optional(),

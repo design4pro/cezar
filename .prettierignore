@@ -1,0 +1,9 @@
+# The six afk-* skills, vendored. They were rendered from design4pro/agent-kit until it was
+# retired; they are ordinary files now, kept out of Prettier so their prose wraps as written
+# rather than as the formatter would rewrap it.
+.ai/skills/afk-architecture-review/SKILL.md
+.ai/skills/afk-codebase-design/SKILL.md
+.ai/skills/afk-domain-modeling/SKILL.md
+.ai/skills/afk-lessons/SKILL.md
+.ai/skills/afk-to-tickets/SKILL.md
+.ai/skills/afk-triage/SKILL.md

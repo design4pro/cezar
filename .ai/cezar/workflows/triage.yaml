@@ -1,0 +1,3 @@
+name: triage
+description: Triage one GitHub issue unattended - verify, write an Agent Brief, set one intake label (afk-triage).
+skills: [afk-triage]

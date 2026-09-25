@@ -250,6 +250,40 @@ describe('ProjectAutomationScheduler', () => {
       tieBreaker: 'scanned',
     });
   });
+
+  it('widens a truncated poll that left the cursor in place, then stops climbing at that cursor', async () => {
+    const { store, definition } = await setup();
+    const pinned = { timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'pinned' };
+    store.setState(definition.id, (current) => ({ ...current, cursor: pinned }));
+    const poll = vi.fn(async (_owner: string, _repo: string, _polled: GithubAutomationDefinition) => ({
+      candidates: [], truncated: true, pages: 1, cursor: pinned,
+    }));
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) });
+
+    await scheduler.check(definition);
+    expect(poll.mock.calls.map(([, , polled]) => polled.filters.maxRecords)).toEqual([25, 50, 100]);
+    expect(store.state(definition.id)?.widenExhaustedAt).toEqual(pinned);
+
+    await scheduler.check(definition);
+    expect(poll).toHaveBeenCalledTimes(4);
+    expect(store.state(definition.id)?.widenExhaustedAt).toEqual(pinned);
+  });
+
+  it('stops widening as soon as a wider poll moves the cursor', async () => {
+    const { store, definition } = await setup();
+    const pinned = { timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'pinned' };
+    const advanced = { timestamp: '2026-07-26T02:00:00.000Z', tieBreaker: 'advanced' };
+    store.setState(definition.id, (current) => ({ ...current, cursor: pinned }));
+    const poll = vi.fn(async (_owner: string, _repo: string, polled: GithubAutomationDefinition) => ({
+      candidates: [], truncated: true, pages: 1, cursor: polled.filters.maxRecords > 25 ? advanced : pinned,
+    }));
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) });
+
+    await scheduler.check(definition);
+    expect(poll.mock.calls.map(([, , polled]) => polled.filters.maxRecords)).toEqual([25, 50]);
+    expect(store.state(definition.id)?.cursor).toEqual(advanced);
+    expect(store.state(definition.id)?.widenExhaustedAt).toBeUndefined();
+  });
 });
 
 describe('WorkspaceAutomationScheduler', () => {

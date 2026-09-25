@@ -135,6 +135,11 @@ export class GithubPoller {
     }
     if (labelEvents.length) {
       sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true, reviews: false });
+      // Pull requests get a source of their own rather than the 'mixed' family: 'mixed' emits no
+      // `is:` qualifier, and /search/issues rejects such a query with HTTP 422.
+      if (definition.filters.includePullRequests) {
+        sources.push({ family: 'prs', activity: 'updated', opened: false, labels: true, reviews: false });
+      }
     }
     if (reviewEvents.length) {
       sources.push({ family: 'prs', activity: 'updated', opened: false, labels: false, reviews: true });
@@ -191,7 +196,7 @@ export class GithubPoller {
             });
           }
         }
-        if (source.labels && !item.pull_request) {
+        if (source.labels && (source.family === 'prs' || !item.pull_request)) {
           const timeline = await this.timeline(owner, repo, item.number);
           const events = reconstructLabelEvents(owner, repo, item, timeline);
           for (const event of events) {
@@ -302,7 +307,18 @@ export class GithubPoller {
       '-H', 'Accept: application/vnd.github+json', '-f', `per_page=${TIMELINE_PAGE_SIZE}`,
       '-f', `page=${page}`,
     ]);
-    return z.array(timelineEventSchema).parse(JSON.parse(raw));
+    // Filter BEFORE validating. `/timeline` is a heterogeneous, additive GitHub
+    // surface — `commented`, `cross-referenced`, `assigned`, `renamed`, … all
+    // share the array with the two entries this poller reconstructs from. Passing
+    // the whole array through `timelineEventSchema` made the first such entry
+    // reject the parse, and the throw propagated out of `poll()`, so no candidate
+    // on the page was ever evaluated (#914). `timelineEventSchema` stays strict
+    // for the entries that matter: a `labeled` entry with a malformed `label` is
+    // still dropped rather than crashing the poll.
+    return z.array(z.unknown()).parse(JSON.parse(raw)).flatMap((entry) => {
+      const parsed = timelineEventSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 
   /** The last page number from the `Link` header of a header-included request; 1 when absent. */

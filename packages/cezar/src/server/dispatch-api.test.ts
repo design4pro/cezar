@@ -72,6 +72,12 @@ describe('the dispatch routes', () => {
     expect(calls).toEqual([]);
   });
 
+  it.each(['../.claude/settings.json', '/tmp/settings.json', 'src/../../settings.json'])('rejects write scope outside the worktree: %s', async (path) => {
+    const res = await apiRequest(app, '/api/v1/runs/parent-1/dispatch', json({ objective: 'fix', writePaths: [path] }));
+    expect(res.status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
   it('records a report and answers ok; 404 for a run outside any tree', async () => {
     const report = { status: 'done', result: 'all green', evidence: ['npm test → 3 passed'], verdict: 'approve' };
     const res = await apiRequest(app, '/api/v1/runs/child-1/report', json(report));

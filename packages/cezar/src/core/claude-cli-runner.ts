@@ -1,6 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve as resolvePath } from 'node:path';
+import { dirname, posix, resolve as resolvePath } from 'node:path';
 import type {
   AgentEvent,
   AgentRunResult,
@@ -102,6 +102,10 @@ export class ClaudeCliRunner implements AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts: SessionOptions = {},
   ): AgentSession {
+    const preflight = protectedWritePreflight(spec);
+    if (preflight.status === 'requires-supervision') {
+      throw new Error(`Permission preflight: protected configuration writes require supervised approval in worktree ${spec.cwd}: ${preflight.paths.join(', ')}. Open this worktree in the interactive CLI and approve only these paths; do not retry unattended or bypass permissions.`);
+    }
     const args = buildClaudeArgs(spec);
 
     let child: ChildProcessWithoutNullStreams;
@@ -219,6 +223,7 @@ export class ClaudeCliRunner implements AgentRunner {
     // Optional wall-clock kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
+    let permissionDenied = false;
     let killTimer: NodeJS.Timeout | undefined;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
@@ -237,7 +242,7 @@ export class ClaudeCliRunner implements AgentRunner {
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
-          if (timedOut) break;
+          if (timedOut || permissionDenied) break;
           let msg: ClaudeStreamMessage;
           try {
             msg = JSON.parse(line) as ClaudeStreamMessage;
@@ -268,10 +273,17 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'token-usage', tokensUsed });
           }
 
+          if (msg.type === 'result' && typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+            onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
+          }
+          if (msg.type === 'result' && Array.isArray(msg.permission_denials) && msg.permission_denials.length > 0) {
+            permissionDenied = true;
+            end();
+            onEvent?.({ type: 'error', message: `Permission denied. Stopped after the first denied turn; use a supervised session with explicit worktree-scoped approval in ${spec.cwd}. Do not retry unattended or bypass permissions.` });
+            interrupt();
+            continue;
+          }
           if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
-              onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
-            }
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {
               autoEndTimer = setTimeout(end, AUTO_END_DELAY_MS);
@@ -346,6 +358,13 @@ export class ClaudeCliRunner implements AgentRunner {
     this.lastSession = session;
     return session;
   }
+}
+
+/** Explicit scope only: a repository containing .claude does not imply a config-edit task. */
+export function protectedWritePreflight(spec: AgentRunSpec): { status: 'eligible' | 'requires-supervision'; paths: string[]; worktree: string } {
+  const paths = (spec.writePaths ?? []).filter((path) => /^\.claude(?:\/|$)/.test(posix.normalize(path)));
+  // No caller-provided boolean can grant approval for the CLI's protected configuration files.
+  return { status: paths.length ? 'requires-supervision' : 'eligible', paths, worktree: spec.cwd };
 }
 
 /**
@@ -440,6 +459,7 @@ interface ClaudeStreamMessage {
   usage?: RawUsage;
   is_error?: boolean;
   total_cost_usd?: number;
+  permission_denials?: unknown[];
 }
 
 function normalizeIntentionalTeardownResult(

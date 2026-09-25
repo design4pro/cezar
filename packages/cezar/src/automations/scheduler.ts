@@ -6,7 +6,7 @@ import type { AutomationStore } from './store.ts';
 import type { TrackerDriver } from '../server/tracker/types.ts';
 import type { TrackerFailure } from '@open-mercato/cezar-contract';
 import { TrackerPoller, type TrackerAutomationCandidate } from './tracker-poller.ts';
-import { isGithubAutomation, isScheduleAutomation, isTrackerAutomation, type GithubAutomationDefinition, type TrackerAutomationDefinition } from './types.ts';
+import { isGithubAutomation, isScheduleAutomation, isTrackerAutomation, type AutomationRuntimeState, type GithubAutomationDefinition, type TrackerAutomationDefinition } from './types.ts';
 
 const CURSOR_OVERLAP_MS = 120_000;
 
@@ -69,12 +69,40 @@ export class ProjectAutomationScheduler {
     /** This call is the scheduler's own turn, not a by-hand preview from the API. */
     const scheduled = mode === 'execute' || detectionOnly;
     const { store } = this.handle;
+    // `poll` runs once per cycle, so the climb it records reaches `persist` through these.
+    let polledFrom: AutomationRuntimeState['cursor'];
+    let widenExhausted = false;
     return runEventPollCycle({
       store, definition, mode, scheduled, onChange: this.handle.onChange,
-      poll: state => {
+      poll: async state => {
         const since = state.cursor?.timestamp ?? state.baselineAt;
-        return githubRequests.run(() => github.poller.poll(github.owner, github.repo, definition,
-          { since: since ? new Date(Date.parse(since) - CURSOR_OVERLAP_MS).toISOString() : undefined }));
+        const overlapSince = since ? new Date(Date.parse(since) - CURSOR_OVERLAP_MS).toISOString() : undefined;
+        let result = await githubRequests.run(() => github.poller.poll(github.owner, github.repo, definition, { since: overlapSince }));
+        // A truncated poll whose observations all sit in the overlap band hands back the cursor
+        // it was given, so the automation re-reads one window forever. Widen the budget of a poll
+        // that made no progress, doubling up to the search ceiling: poll() evaluates a contiguous
+        // prefix, so a wider budget only reaches further into the same run. A cursor the climb
+        // already failed at is not climbed again - up to 255 timeline reads a poll against a rate
+        // limit every run on the host shares - until the cursor moves.
+        polledFrom = state.cursor;
+        widenExhausted = sameCursor(state.widenExhaustedAt, state.cursor);
+        for (let budget = definition.filters.maxRecords; !widenExhausted
+          && mode === 'execute'
+          && state.cursor
+          && result.truncated
+          && laterCursor(state.cursor, result.cursor) === state.cursor;) {
+          // Ends when the budget stops growing, not at a particular number, so termination never
+          // depends on two literals agreeing.
+          const next = Math.min(budget * 2, 100);
+          if (next <= budget) {
+            widenExhausted = true;
+            break;
+          }
+          budget = next;
+          const widened = { ...definition, filters: { ...definition.filters, maxRecords: budget } };
+          result = await githubRequests.run(() => github.poller.poll(github.owner, github.repo, widened, { since: overlapSince }));
+        }
+        return result;
       },
       eligible: (candidate, state) => !state.cursor || Date.parse(candidate.timestamp) >= Date.parse(state.cursor.timestamp) - CURSOR_OVERLAP_MS,
       launch: (candidate: GithubCandidate) => this.launch(definition, candidate),
@@ -83,6 +111,12 @@ export class ProjectAutomationScheduler {
         return {
           ...current, revision: definition.revision, cursor,
           frozenHighWatermark: result.truncated && cursor?.tieBreaker ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker } : undefined,
+          // Only while the cursor stayed put: `widenExhausted` is never reset, so on the poll
+          // that escapes a pin it is still true, and marking the new cursor would disable
+          // widening at a cursor nobody climbed.
+          widenExhaustedAt: widenExhausted && sameCursor(cursor, polledFrom) && cursor?.tieBreaker
+            ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
+            : undefined,
           lastSuccessAt: new Date().toISOString(),
           nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1000).toISOString(),
           consecutiveFailures: 0,
@@ -221,6 +255,13 @@ function laterCursor(
 
 /** The shortest a failed item is ever pushed out; a poll interval is at least this anyway. */
 const MIN_RETRY_MS = 60_000;
+
+function sameCursor(
+  a: { timestamp: string; tieBreaker?: string } | undefined,
+  b: { timestamp: string; tieBreaker?: string } | undefined,
+): boolean {
+  return !!a && !!b && a.timestamp === b.timestamp && a.tieBreaker === b.tieBreaker;
+}
 
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;

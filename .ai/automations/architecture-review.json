@@ -1,0 +1,14 @@
+{
+  "name": "Weekly architecture review",
+  "description": "Mondays: find deepening opportunities in the last 30 days of hot spots and file at most three refactor issues.",
+  "kind": "schedule",
+  "schedule": { "type": "weekly", "day": 1, "hour": 6, "minute": 0 },
+  "task": {
+    "prompt": "Run the afk-architecture-review skill for {{project}} on {{date}}.",
+    "workflow": "architecture-review",
+    "worktree": true,
+    "autonomous": true,
+    "generateFollowups": false,
+    "dispatch": { "maxSubtasks": 3, "reviewChild": false }
+  }
+}

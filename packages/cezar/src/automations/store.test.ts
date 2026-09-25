@@ -135,6 +135,16 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(store.acquireLease(0)).toBeDefined();
   });
 
+  it('treats a lock whose mtime is ahead of the clock as age zero, not as negative age', async () => {
+    // `Date.now()` is floored to the millisecond and `mtimeMs` is not, so a lock written
+    // microseconds ago measures as NEGATIVE age. A clock that is behind the filesystem does the
+    // same thing on a larger scale, which is what makes it testable without racing the write.
+    const dir = await lockedDirectory('{half-writ');
+    const behind = new Date(Date.now() - 5_000);
+    const store = AutomationStore.open(dir, { now: () => behind, processAlive: () => false });
+    expect(store.acquireLease(0)).toBeDefined();
+  });
+
   it('probes real pids when nothing is injected', async () => {
     const live = await lockedDirectory(JSON.stringify({ pid: process.ppid, startedAt: new Date().toISOString() }));
     expect(AutomationStore.open(live).acquireLease()).toBeUndefined();

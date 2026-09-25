@@ -37,6 +37,8 @@ export const automationFiltersSchema = z
     /** Tracker kind only: the vendor workflow status a matching item must currently be in
      *  (e.g. "To Do"). Case-insensitive match against the item's own `status` field. */
     status: z.string().trim().min(1).max(200).optional(),
+    /** Label events on pull requests too, not only on issues. */
+    includePullRequests: z.boolean().optional(),
   })
   .passthrough();
 
@@ -168,6 +170,10 @@ export const automationRuntimeStateSchema = z
     cursor: automationCursorSchema.optional(),
     checkpoint: z.string().optional(),
     frozenHighWatermark: automationCursorSchema
+      .extend({ tieBreaker: z.string() })
+      .optional(),
+    /** The cursor a widening climb ran to the search ceiling at without advancing. */
+    widenExhaustedAt: automationCursorSchema
       .extend({ tieBreaker: z.string() })
       .optional(),
     backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),

@@ -208,7 +208,18 @@ export async function createWorktree(
     return worktreeInfo(absolutePath, branch, base);
   }
 
-  const create = await git(repoRoot, ['worktree', 'add', '-b', branch, absolutePath, base]);
+  // Two runs forking at once race on the shared .git/config: `worktree add -b` writes the new
+  // branch's tracking keys there, and git's config lock does not retry. The branch exists by
+  // then, so the retry reattaches it, which writes no shared config. Not matched on the error
+  // text: git localizes it.
+  let create = await git(repoRoot, ['worktree', 'add', '-b', branch, absolutePath, base]);
+  for (let attempt = 1; !create.ok && attempt <= 4; attempt++) {
+    await new Promise((done) => setTimeout(done, 150 * attempt + Math.floor(Math.random() * 150)));
+    const forked = await git(repoRoot, ['show-ref', '--verify', '--quiet', branchRef]);
+    create = forked.ok
+      ? await git(repoRoot, ['worktree', 'add', absolutePath, branch])
+      : await git(repoRoot, ['worktree', 'add', '-b', branch, absolutePath, base]);
+  }
   if (!create.ok) {
     throw new Error(`git worktree add failed: ${create.stderr.trim() || create.stdout.trim()}`);
   }

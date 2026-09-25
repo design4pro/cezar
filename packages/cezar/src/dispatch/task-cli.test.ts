@@ -68,6 +68,15 @@ describe('cez task', () => {
     });
   });
 
+  it('carries explicit write ownership and paths, and refuses a half-declared target', async () => {
+    const h = harness({ status: 201, body: { id: 'child' } });
+    expect(await runTaskCommand(['create', 'fix', '--write-repository', 'acme/demo', '--write-number', '671', '--write-path', '.claude/hooks/guard.sh'], env, h.io)).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toMatchObject({ writeTarget: { repository: 'acme/demo', number: 671 }, writePaths: ['.claude/hooks/guard.sh'] });
+    const invalid = harness({ status: 201, body: {} });
+    expect(await runTaskCommand(['create', 'fix', '--write-number', '671'], env, invalid.io)).toBe(1);
+    expect(invalid.calls).toHaveLength(0);
+  });
+
   it('falls back to the unscoped API without a project id, and refuses without a server', async () => {
     const h = harness({ status: 200, body: { ok: true } });
     await runTaskCommand(['report', '--status', 'done', '--result', 'r'], { CEZ_API_URL: 'http://127.0.0.1:1', CEZ_TASK_ID: 'r1' }, h.io);

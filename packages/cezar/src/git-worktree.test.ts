@@ -114,6 +114,22 @@ describe('createWorktree recovery (real git)', () => {
     expect(listed.stdout.match(new RegExp(`branch refs/heads/${branchFor(runId)}`, 'g'))).toHaveLength(1);
   });
 
+  it('retries a fork that lost the shared config lock to a concurrent run', async () => {
+    const repo = await fixtureRepo('cez-worktree-config-lock-');
+    const runId = '44444444-4444-4444-8444-444444444444';
+    // Tracking keys make `worktree add -b` write .git/config, as forking from origin/<base> does.
+    await run('git', ['config', 'branch.autoSetupMerge', 'always'], { cwd: repo });
+    const lock = join(repo, '.git', 'config.lock');
+    writeFileSync(lock, '');
+    const released = new Promise<void>((done) => setTimeout(() => { rmSync(lock, { force: true }); done(); }, 100));
+
+    const info = await createWorktree(repo, runId, 'main');
+    await released;
+
+    const head = await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: info.path });
+    expect(head.stdout.trim()).toBe(branchFor(runId));
+  });
+
   it('reattaches a surviving task branch after its worktree directory is deleted', async () => {
     const repo = await fixtureRepo('cez-worktree-reattach-');
     const runId = '22222222-2222-4222-8222-222222222222';
