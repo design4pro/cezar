@@ -68,6 +68,33 @@ describe('buildClaudeArgs approval gate', () => {
 });
 
 /**
+ * A run in a dispatch tree is told to write its notes.md and inbox messages under
+ * CEZ_TREE_DIR. A grant without Write must still let it do that, and only there.
+ */
+describe('buildClaudeArgs tree directory writes', () => {
+  const tree = '/data/.ai/cezar/dispatch/root-1';
+  const allowedFlag = (args: string[]) => args[args.indexOf('--allowedTools') + 1];
+
+  it('allows writes under the tree directory when the grant has no Write', () => {
+    const args = buildClaudeArgs(
+      { userPrompt: 'do it', cwd: '/tmp', allowedTools: ['Read', 'Grep', 'Glob', 'Bash'], env: { CEZ_TREE_DIR: tree } },
+      {},
+    );
+    expect(allowedFlag(args)).toBe('Read,Grep,Glob,Bash,Edit(//data/.ai/cezar/dispatch/root-1/**)');
+  });
+
+  it('adds nothing when the grant already has Write, or the run is in no tree', () => {
+    const withWrite = buildClaudeArgs(
+      { userPrompt: 'do it', cwd: '/tmp', allowedTools: ['Read', 'Write'], env: { CEZ_TREE_DIR: tree } },
+      {},
+    );
+    expect(allowedFlag(withWrite)).toBe('Read,Write');
+    const noTree = buildClaudeArgs({ userPrompt: 'do it', cwd: '/tmp', allowedTools: ['Read'], env: {} }, {});
+    expect(allowedFlag(noTree)).toBe('Read');
+  });
+});
+
+/**
  * #703 — a session cezar tore down itself must not settle as an agent
  * failure. Every agent CLI installs its own stop-signal handler and exits
  * `128 + signal`, so the runner sees a NON-ZERO code for a teardown it
