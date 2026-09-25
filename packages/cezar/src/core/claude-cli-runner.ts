@@ -208,6 +208,8 @@ export class ClaudeCliRunner implements AgentRunner {
 
     const toolCalls: AgentToolCallRecord[] = [];
     const textChunks: string[] = [];
+    // Where the current turn's text starts in `textChunks` — the denial check reads one turn.
+    let turnStart = 0;
     let tokensUsed = 0;
     let sawUsage = false;
     let spawnFailed: Error | null = null;
@@ -276,15 +278,23 @@ export class ClaudeCliRunner implements AgentRunner {
           if (msg.type === 'result' && typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
             onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
           }
-          if (msg.type === 'result' && Array.isArray(msg.permission_denials) && msg.permission_denials.length > 0) {
+          const denials = msg.type === 'result' && Array.isArray(msg.permission_denials) ? msg.permission_denials : [];
+          // A denied turn that still finished (the caller's `settlesDeniedTurn`, e.g. it ended
+          // with `CEZ:DONE`) ends normally, flagged; any other denied turn stops the session.
+          const deniedTurnSettles = denials.length > 0 && opts.settlesDeniedTurn?.(textChunks.slice(turnStart).join('\n')) === true;
+          if (denials.length > 0 && !deniedTurnSettles) {
             permissionDenied = true;
             end();
             onEvent?.({ type: 'error', message: `Permission denied. Stopped after the first denied turn; use a supervised session with explicit worktree-scoped approval in ${spec.cwd}. Do not retry unattended or bypass permissions.` });
             interrupt();
             continue;
           }
+          if (deniedTurnSettles) {
+            onEvent?.({ type: 'note', message: `Permission denied: ${describeDenials(denials)}. The turn still ended with its turn-end marker, so it settles on it; the denied calls did not run.` });
+          }
           if (msg.type === 'result') {
-            onEvent?.({ type: 'turn-end' });
+            turnStart = textChunks.length;
+            onEvent?.({ type: 'turn-end', ...(deniedTurnSettles ? { permissionDenied: true as const } : {}) });
             if (opts.autoEndAfterFirstTurn && stdinOpen && !autoEndTimer) {
               autoEndTimer = setTimeout(end, AUTO_END_DELAY_MS);
               autoEndTimer.unref?.();
@@ -460,6 +470,18 @@ interface ClaudeStreamMessage {
   is_error?: boolean;
   total_cost_usd?: number;
   permission_denials?: unknown[];
+}
+
+/** `Edit .claude/settings.json, Bash git push` — what each denied call tried, one line. */
+function describeDenials(denials: unknown[]): string {
+  return denials
+    .map((raw) => {
+      const denial = (raw ?? {}) as { tool_name?: unknown; tool_input?: { file_path?: unknown; command?: unknown } };
+      const tool = typeof denial.tool_name === 'string' ? denial.tool_name : 'unknown tool';
+      const target = denial.tool_input?.file_path ?? denial.tool_input?.command;
+      return typeof target === 'string' ? `${tool} ${truncate(target)}` : tool;
+    })
+    .join(', ');
 }
 
 function normalizeIntentionalTeardownResult(

@@ -108,6 +108,11 @@ async function respond(userText, imageCount) {
     (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
+  // `mock:denied` → the turn's result frame reports a permission denial (the shape
+  // `--permission-mode dontAsk` emits), so the denied-turn path is testable dry.
+  const denials = userText.includes('mock:denied')
+    ? { permission_denials: [{ tool_name: 'Edit', tool_input: { file_path: '.claude/settings.json' } }] }
+    : {};
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
   // `mock:monitoring-refs` → the same marker, but with task-reference marker lines AFTER it
@@ -504,6 +509,7 @@ async function respond(userText, imageCount) {
       subtype: 'success',
       result: 'Done with the first pass (dry run).',
       usage: { input_tokens: 1270, output_tokens: 185 },
+      ...denials,
       total_cost_usd: 0.0342,
     });
     return;
@@ -524,6 +530,7 @@ async function respond(userText, imageCount) {
     subtype: 'success',
     result: `Follow-up #${turn - 1} handled (dry run).`,
     usage: { input_tokens: 200, output_tokens: 60 },
+    ...denials,
     total_cost_usd: 0.0051,
   });
 }

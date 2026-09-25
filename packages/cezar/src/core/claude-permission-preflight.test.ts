@@ -35,4 +35,53 @@ process.stdin.once('data', () => {
       expect(events.some((event) => event.type === 'turn-end')).toBe(false);
     } finally { rmSync(cwd, { recursive: true, force: true }); }
   });
+
+  it('ends a denied turn normally, flagged, when the caller settles it on that turn\'s text', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cezar-permission-'));
+    const bin = join(cwd, 'denied.mjs');
+    writeFileSync(bin, `#!/usr/bin/env node
+let turn = 0;
+process.stdin.on('data', () => {
+  turn += 1;
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'turn ' + turn + (turn === 2 ? ' CEZ:DONE' : '') }] } }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', ...(turn === 2 ? { permission_denials: [{ tool_name: 'Bash', tool_input: { command: 'git push' } }] } : {}) }));
+});
+`);
+    chmodSync(bin, 0o755);
+    try {
+      const events: AgentEvent[] = [];
+      const seen: string[] = [];
+      const runner = new ClaudeCliRunner({ bin, timeoutMs: 5000 });
+      const session = runner.startSession({ cwd, userPrompt: 'one' }, (event) => {
+        events.push(event);
+        if (event.type === 'turn-end' && !event.permissionDenied) session.sendMessage([{ type: 'text', text: 'two' }]);
+        if (event.type === 'turn-end' && event.permissionDenied) session.end();
+      }, { settlesDeniedTurn: (text) => { seen.push(text); return text.endsWith('CEZ:DONE'); } });
+      await session.result;
+      // The predicate reads the denied turn only, not the whole session.
+      expect(seen).toEqual(['turn 2 CEZ:DONE']);
+      expect(events.filter((event) => event.type === 'error')).toEqual([]);
+      expect(events.filter((event) => event.type === 'turn-end')).toEqual([{ type: 'turn-end' }, { type: 'turn-end', permissionDenied: true }]);
+      expect(events).toContainEqual({ type: 'note', message: expect.stringContaining('Permission denied: Bash git push.') });
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
+
+  it('still stops a denied turn the caller does not settle', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'cezar-permission-'));
+    const bin = join(cwd, 'denied.mjs');
+    writeFileSync(bin, `#!/usr/bin/env node
+process.stdin.once('data', () => {
+  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'still at it CEZ:MONITORING' }] } }));
+  console.log(JSON.stringify({ type: 'result', subtype: 'success', permission_denials: [{ tool_name: 'Edit', tool_input: { file_path: '.claude/settings.json' } }] }));
+});
+`);
+    chmodSync(bin, 0o755);
+    try {
+      const events: AgentEvent[] = [];
+      const runner = new ClaudeCliRunner({ bin, timeoutMs: 5000 });
+      await runner.startSession({ cwd, userPrompt: 'watch' }, (event) => events.push(event), { settlesDeniedTurn: () => false }).result;
+      expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+      expect(events.some((event) => event.type === 'turn-end')).toBe(false);
+    } finally { rmSync(cwd, { recursive: true, force: true }); }
+  });
 });
