@@ -86,9 +86,13 @@ describe('a resumed session keeps its workflow step tools', () => {
     await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot);
+    // The fake sessions below were never written by a real claude. A config dir with nothing to
+    // read keeps the saved-session check failing open (resume), and off the real ~/.claude.
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(repoRoot, 'claude-home'));
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     manager?.dispose();
     manager = undefined;
     store.flush();
