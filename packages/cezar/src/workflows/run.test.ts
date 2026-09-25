@@ -657,6 +657,82 @@ describe('RunManager.continueRun override', () => {
 });
 
 /**
+ * A Cancel that lands while a continuation is still starting up. `runContinuation` registers its
+ * ActiveRun and marks the run `running` BEFORE it awaits the account/env resolution, and until the
+ * session exists `interrupt` is a no-op - so the cancel only set `cancelled`, the session then
+ * started anyway, and a turn that never ends on its own kept the run `running` forever.
+ */
+describe('RunManager.cancel during continuation startup', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-continue-cancel-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('interrupts the session a cancel beat to the spawn', async () => {
+    const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [{ id: 'task', name: 'task', kind: 'agent' }] });
+    store.updateRun(record.id, { status: 'done' });
+    store.updateStep(record.id, 'task', { sessionId: 'test-session' });
+    // `updateRun` emits synchronously, so this cancels at the exact `running` write that precedes
+    // the continuation's pre-spawn awaits - deterministically inside the window.
+    let cancelled = false;
+    const onRun = (updated: RunRecord) => {
+      if (updated.id !== record.id || updated.status !== 'running') return;
+      store.off('run', onRun);
+      cancelled = manager.cancel(record.id);
+    };
+    store.on('run', onRun);
+    expect(manager.continueRun(record.id, { text: 'mock:pause mock:done resume' })).toEqual({ ok: true });
+    const deadline = Date.now() + 15_000;
+    while (!cancelled || manager.isActive(record.id)) {
+      if (Date.now() > deadline) throw new Error('the cancelled continuation never stopped');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(store.getRun(record.id)?.status).toBe('cancelled');
+  }, 30_000);
+
+  it('interrupts a workflow step session a cancel beat to the spawn', async () => {
+    const workflow: WorkflowDef = { name: 'quick-task', source: 'built-in', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] };
+    let cancelledId: string | undefined;
+    // The step turns `running` before `runAgentStep` awaits the model provider and account env.
+    const onRun = (updated: RunRecord) => {
+      if (cancelledId || updated.steps[0]?.status !== 'running') return;
+      store.off('run', onRun);
+      if (manager.cancel(updated.id)) cancelledId = updated.id;
+    };
+    store.on('run', onRun);
+    const record = manager.startRun(workflow, { task: 'mock:pause mock:done work', worktree: false });
+    const deadline = Date.now() + 15_000;
+    while (!cancelledId || manager.isActive(record.id)) {
+      if (Date.now() > deadline) throw new Error('the cancelled step never stopped');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(store.getRun(record.id)?.status).toBe('cancelled');
+  }, 30_000);
+});
+
+/**
  * Optional review gate (#489, spec 2026-07-18-optional-review-gate): the
  * terminal `settleSuccess` transition parks a changed run at `review` ONLY when
  * the gate is enabled (config toggle over `CEZ_REVIEW_GATE`, default off) and the
