@@ -1,58 +1,33 @@
+<p align="center">
+  <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
+</p>
+
 <div align="center">
-  <h1>cezar ⚡</h1>
+  <h1>Cezar - orchestrate hundreds of AI coding agents, 24/7.</h1>
 </div>
 
-<h4 align="center">
+<p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">Demo</a>&nbsp;·
   <a href="#quick-start">Quick start</a>&nbsp;·
   <a href="docs/reference.md">Docs</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">Issues</a>
-</h4>
-
-- 👀 **No visibility into a running agent.** A headless `claude` run is a black box
-  until it finishes. cezar streams every step — agent text, each tool call and
-  its result, tokens and cost per step — live, and keeps the full replay.
-- 🧩 **One agent, one working tree, one thing at a time.** Kick off a second task and
-  it fights the first over your files. cezar runs each task in its **own git
-  worktree**, so two (or three) agents work in parallel without stepping on
-  each other — or on the branch you're editing.
-- 🗂️ **A backlog that needs babysitting.** Queue a stack of tasks and cezar
-  **orchestrates** them: it runs up to your parallel limit and holds the rest in
-  an ordered queue. Point it at a GitHub issue and it runs straight on that, so
-  working the tracker down stops being a manual chore. Turn on the opt-in
-  **Inbox** (`CEZ_FOLLOWUPS=1`) and an agent's leftover follow-ups become the
-  next tasks too — one click each.
-- 🤖 **"Autonomous" means you still have to sit there.** Flip the **Autonomous**
-  flag and a run never parks to ask — it keeps going until the task is done, and it
-  always skips the review gate below. Pair it with a **skill** (a Markdown playbook)
-  and you've got fire-and-forget automation: hand off "fix this", "upgrade that",
-  "triage these" and walk away.
-- ✅ **The agent finishes and you have to trust it.** Nothing ever auto-merges — the
-  work rests on the task's own branch until you act on it. Switch on the optional
-  **review gate** (Settings → Agents, or `CEZ_REVIEW_GATE=1`; off by default) and a
-  non-autonomous run with changes parks at `review` instead of finishing: inspect the
-  diff, send notes back into the same session, or push a **draft PR**.
-- ♻️ **Losing a session when it fails.** Every run records its `claude` session id.
-  Take it over interactively in one click (`claude --resume <id>`), or continue it
-  in-process from the cockpit.
-- 🔀 **Locked into one agent vendor.** Most tools wed you to a single CLI. cezar
-  drives **Claude Code, Codex and OpenCode (experimental)** through one runner seam — set a
-  default, pick a backend per task, or mix them inside one workflow (implement
-  with one agent, review with another) — and through **OpenCode** you can point
-  a run at **open-source or local models**, not just the big vendors. See
-  [Agent backends](#coding-agent-backends).
-- 🖥️ **Close the laptop and the work stops.** A local agent only runs while your
-  machine is on and awake. Put cezar on a **VPS, cloud box, or dedicated server**
-  and the cockpit becomes the GUI for an **always-on AI coding team** — kick off,
-  watch and steer tasks from your laptop or **phone**, on the train or between
-  meetings, while the agents keep grinding through the backlog back on the server.
-- ⚡ **Setup tax.** No wizard, no env vars, no schema. Skills are Markdown, workflows
-  are short YAML, and everything degrades: no `gh` → works without PRs, no network
-  → local skills still load, no `.ai/skills` → the bare prompt still runs.
-
----
+</p>
 
 <p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
+</p>
+
+<div align="center">
+  <h2>
+    One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
+    Run agents locally or on a VPS, automate multi-step workflows,<br />
+    and let them keep working while you're away.
+  </h2>
+</div>
+
+<p align="center">
+  <a href="https://cezar.run/">
+    <img alt="Website: cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">
@@ -87,6 +62,11 @@
 - 🧩&nbsp;Skills are Markdown files and workflows are short YAML files. Mix agents per step.
 - 🐙&nbsp;Run the agent straight on a GitHub issue. Nothing merges on its own.
 - 📂&nbsp;One cockpit for all your projects.
+- 📊&nbsp;A workspace dashboard shows what needs you, what is running and what finished across your projects.
+- 💸&nbsp;Track reported cost and token usage by project in **Usage & cost**.
+- ⏰&nbsp;Schedule recurring work or launch tasks from GitHub and supported tracker events with **Automations**.
+- 🌳&nbsp;Agents can delegate independent work to child tasks, each in its own worktree, and receive their reports in the parent session.
+- 🎫&nbsp;Connect **Jira or Linear** to browse issues and launch tasks from your project tracker.
 - 💾&nbsp;No database. Everything is saved as plain files in `.ai/cezar/`.
 
 ## Screenshots
@@ -115,6 +95,18 @@
 
 [![Skills + Autonomous: Pick a playbook, flip Autonomous and walk away.](docs/screenshots/skills-autonomous.png)](docs/screenshots/skills-autonomous.png)
 
+**Dashboard** — See what needs your input or review, what is running and what finished across your workspace.
+
+[![Dashboard: Workspace task counts, review requests and recent results.](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png)
+
+**Usage & cost** — Compare reported spend and token usage across projects.
+
+[![Usage and cost: Reported spend, input and output tokens, and a project breakdown.](docs/screenshots/usage-costs.png)](docs/screenshots/usage-costs.png)
+
+**Automations** — Schedule maintenance and reviews, and see the week ahead alongside GitHub triggers.
+
+[![Automations: A weekly calendar of scheduled tasks and a pull-request review trigger.](docs/screenshots/automation-calendar.png)](docs/screenshots/automation-calendar.png)
+
 **On your phone** — the same cockpit, from the task list to the diff.
 
 <table>
@@ -129,28 +121,28 @@
 
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
-[OpenCode](https://opencode.ai) or [pi](https://github.com/badlogic/pi-mono).
+[OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview) or [pi](https://github.com/badlogic/pi-mono).
 `git` and `gh` are optional.
 
 ```bash
 cd your-repo
-npx cezar-cli
+npx cezar-run
 ```
 
-This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**.
+This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**. `npx cezar-cli` still works too — it's the same package under its older name.
 
 ```bash
-npx cezar-cli run "add a --json flag to the export command"   # headless, no browser
-npx cezar-cli init                                            # scaffold .ai/cezar/
-npx cezar-cli@nightly                                         # try tonight's build
+npx cezar-run run "add a --json flag to the export command"   # headless, no browser
+npx cezar-run init                                            # scaffold .ai/cezar/
+npx cezar-run@nightly                                         # try tonight's build
 ```
 
-> Just want to look around? Run `CEZ_DRY_RUN=1 npx cezar-cli`. It uses a built-in mock agent, so you don't need to log in.
+> Just want to look around? Run `CEZ_DRY_RUN=1 npx cezar-run`. It uses a built-in mock agent, so you don't need to log in.
 
 ### Run it on a server
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 This sets up HTTPS, a login and a system service, so you can open the cockpit from anywhere, including your phone.
@@ -178,6 +170,27 @@ steps:
 ```
 
 The built-in `quick-task` workflow runs with no setup.
+
+## Automations
+
+Turn repeatable work into an automation: check dependencies every morning, draft
+release notes on Fridays, or review each new pull request. Each match or scheduled
+occurrence launches an ordinary cezar task with the workflow and agent you choose.
+
+Create one in **Automations**, or ask the agent to set it up from a prompt.
+Preview event filters before enabling them. The list shows triggers, upcoming
+runs and recent outcomes; pause an automation whenever you need to.
+
+[![Automation list: Triggers, next runs and recent task outcomes.](docs/screenshots/automations.png)](docs/screenshots/automations.png)
+
+## Task dispatch
+
+For independent pieces of work, an agent can dispatch child tasks — for example,
+changes in separate modules or a fresh review of a finished branch. Each child
+gets its own worktree, appears under its parent in the task list and reports back
+into the parent session.
+cezar limits a parent to four children in flight; when a parent has a budget,
+its children share that budget. Nothing auto-merges.
 
 ## Documentation
 

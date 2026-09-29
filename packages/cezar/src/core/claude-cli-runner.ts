@@ -122,6 +122,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -202,6 +203,15 @@ export class ClaudeCliRunner implements AgentRunner {
       if (!hasExited()) signalChild('SIGTERM');
     };
 
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, 1_000);
+      hardKillTimer.unref?.();
+    };
+
     // Seed the first user message — the same path every follow-up takes.
     // Pasted task screenshots (spec.images) ride along as leading blocks.
     sendMessage([...(spec.images ?? []), { type: 'text', text: spec.userPrompt }]);
@@ -275,7 +285,7 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'token-usage', tokensUsed });
           }
 
-          if (msg.type === 'result' && typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+          if (msg.type === 'result' && typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
             onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
           }
           const denials = msg.type === 'result' && Array.isArray(msg.permission_denials) ? msg.permission_denials : [];
@@ -308,6 +318,7 @@ export class ClaudeCliRunner implements AgentRunner {
       } finally {
         if (deadline) clearTimeout(deadline);
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -360,6 +371,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return stdinOpen;

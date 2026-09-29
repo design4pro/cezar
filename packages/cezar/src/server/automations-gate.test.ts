@@ -206,8 +206,11 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // Observe the async warm-up boundary instead of assuming disk discovery finishes in 50ms.
-        await vi.waitFor(() => expect(process.env.CEZ_AUTOMATIONS === '0' ? warmed : started).toHaveBeenCalledTimes(1));
+        // The warm-up chain is `listProjects().then(…)`. An expected start is WAITED for — a fixed
+        // pause is a bet on the machine, and a loaded one loses it. Only the opted-out case has
+        // nothing to wait for, so it keeps the pause: long enough for the chain to return early.
+        if (process.env.CEZ_AUTOMATIONS === '0') await new Promise((resolve) => setTimeout(resolve, 50));
+        else await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1), { timeout: 4000, interval: 10 });
       } finally {
         server.close();
       }
@@ -262,8 +265,12 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // Re-open persisted state while waiting: warm-up finishes after the listening event.
-        await vi.waitFor(() => expect(AutomationStore.open(dataDir).state(staleId)?.baselineAt).toBeTruthy());
+        // Same warm-up wait as "background scheduler" above: the re-baseline runs inside the
+        // `listProjects().then(...)` chain, strictly before `automationScheduler.start()`.
+        await vi.waitFor(() => expect(AutomationStore.open(dataDir).state(staleId)?.baselineAt).toBeTruthy(), {
+          timeout: 4000,
+          interval: 10,
+        });
       } finally {
         server.close();
       }
