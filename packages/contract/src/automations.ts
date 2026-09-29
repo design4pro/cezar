@@ -182,9 +182,9 @@ export const automationRuntimeStateSchema = z.object({
   cursor: automationCursorSchema.optional(),
   checkpoint: z.string().optional(),
   frozenHighWatermark: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
-  /** The cursor a widening climb ran to the search ceiling at without advancing. */
-  widenExhaustedAt: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
   backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+  /** The cursor a widening re-poll could not get past even at the search ceiling (#982). */
+  pinnedCursor: automationCursorSchema.optional(),
   nextCheckAt: z.string().optional(),
   lastSuccessAt: z.string().optional(),
   /** `schedule` kind: the next occurrence's instant and the last fired one's. */
@@ -454,3 +454,17 @@ export const automationCheckInputSchema = z.object({
   mode: z.enum(['preview', 'execute']),
 });
 export type AutomationCheckInput = z.input<typeof automationCheckInputSchema>;
+
+/** Dashboard-only projection: stored timing, no scheduler activation or forge probe. */
+export const dashboardAutomationsQuerySchema = z.object({ projectId: z.string().min(1).max(200) });
+export const dashboardAutomationSchema = automationListEntrySchema.pick({
+  id: true, name: true, kind: true, enabled: true, nextRunAt: true,
+}).extend({
+  state: automationRuntimeStateSchema.pick({ backoffUntil: true, consecutiveFailures: true }).optional(),
+});
+export type DashboardAutomation = z.infer<typeof dashboardAutomationSchema>;
+export const dashboardAutomationsSchema = z.object({
+  timeZone: z.string(),
+  automations: z.array(dashboardAutomationSchema),
+});
+export type DashboardAutomations = z.infer<typeof dashboardAutomationsSchema>;
