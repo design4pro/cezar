@@ -179,6 +179,10 @@ The durable issue comment an agent implements from: current and desired behaviou
 **Resolved assumptions**:
 The table in which an unattended agent records each decision it made instead of asking.
 
+**Delegated decision**:
+A question an unattended agent would have left to a person, settled instead by an independent specialist sub-agent whose verdict the agent applies and records as a Resolved assumptions row (`.ai/skills/afk-decide/SKILL.md`).
+_Avoid_: "a human's call", "decision for the implementer" for a question a specialist can settle.
+
 **Ticket**:
 An issue that is one tracer-bullet slice of a spec: narrow, but complete on its own, with explicit blocking edges.
 

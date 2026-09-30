@@ -28,7 +28,7 @@ Adapted from mattpocock/skills `codebase-design` for unattended runs. Use these 
 - **The interface is the test surface.** Tests cross the same seam callers do. Needing to test past the interface means the module is the wrong shape.
 - **One adapter is a hypothetical seam; two adapters are a real one.** Do not add a seam until something actually varies across it.
 - **Accept dependencies, return results.** Pass collaborators in and return values rather than mutating shared state, so the seam is testable.
-- **Replace, don't layer.** When you deepen a module, the shallow tests it makes redundant should go rather than sit beside the new ones - but propose the deletion, do not perform it. Removing a test is a human's call.
+- **Replace, don't layer.** When you deepen a module, the shallow tests it makes redundant should go rather than sit beside the new ones. The default is to re-point each one at the new interface. Delete a test only when the test engineer specialist (`.ai/skills/afk-decide/SKILL.md`) confirms that every assertion it makes is covered through the new interface, and list each deleted test with its verdict in the PR's Resolved assumptions.
 
 ## Dependency categories (where to put the seam)
 

@@ -20,11 +20,12 @@ Load `.ai/agentic.config.json` and `.ai/trackers/github.md`. The window is the l
 - Run `om-pipeline-retro` with `--since <date 14 days ago>` and keep its ranked causes. Skip its handoff offer.
 - For merged and closed PRs in the window, collect every changes-requested review and every blocker or major finding. Each item needs its PR number and the comment link.
 - Collect PRs that needed a second push after a failing validation gate.
+- Collect the lessons unattended runs recorded themselves: the `## Lessons` section of PR bodies in the window, and of run handoff files (`.ai/cezar/runs/*.handoff.md`) modified in the window. A run cannot edit a user's global instructions, so this is where its lesson goes; each run's lesson counts as one piece of evidence.
 
 ## 2. Group into lessons
 
 A **lesson** is one root cause stated as a rule. Example: "New persisted fields on RunRecord must be optional."
-- Keep only lessons seen in **at least two different PRs**.
+- Keep only lessons seen in **at least two different PRs or runs**.
 - Drop any lesson an existing rule already covers: search `AGENTS.md`, `CODE_REVIEW.md`, `SDLC.md`, `CONTEXT.md`, `.ai/skills/afk-*`, and the lint and test setup.
 - If an existing rule was ignored rather than missing, the fix is to make that rule harder to miss: move it earlier, or make it mechanical. Do not write it a second time.
 

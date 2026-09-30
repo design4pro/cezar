@@ -4,6 +4,8 @@ steps:
   - id: implement
     name: Check readiness and implement
     skill: om-fix
+    # Agent: open questions go to an independent specialist sub-agent (.ai/skills/afk-decide/SKILL.md).
+    allowedTools: [Read, Edit, Write, Grep, Glob, Bash, Agent]
     prompt: |
       {{task}}
 
@@ -20,7 +22,9 @@ steps:
       - Test first at the brief's Test seam, through the module's interface: write the failing test, see it fail, then make it pass (afk-codebase-design).
       - Build one complete vertical slice, inside the acceptance criteria and "Out of scope" (SDLC.md, Scoping rule (SLC)).
       - Use CONTEXT.md terms. Add or update entries for any concept you introduce or rename (afk-domain-modeling).
-      - Record each decision the brief left open as a Resolved assumptions row in the handoff file, for the PR body.
+      - Settle each decision the brief left open through `.ai/skills/afk-decide/SKILL.md` instead of stopping, and record each verdict as a Resolved assumptions row in the handoff file, for the PR body.
+      - For a `risk-high` or `security` issue, the brief must carry the security and tenancy specialist's approving verdict; meet its CONDITIONS as acceptance criteria. Without that verdict, get one through `afk-decide` before claiming.
+      - A lesson worth keeping goes in a `## Lessons` section of the handoff file and the PR body, never into files outside the repository; `afk-lessons` collects it.
   - id: gate
     name: Validation gate
     command: (test -d node_modules || npm ci) && npm run typecheck && npm test && npm run test:unit && npm run build && npm run test:package

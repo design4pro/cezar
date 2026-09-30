@@ -74,7 +74,7 @@ Every spec, ticket and agent-sized issue is scoped **Simple, Lovable, Complete**
 - **Lovable**: no rough edge is left "for later" inside that scope. Error states, empty states, docs and tests ship with the change.
 - **Complete**: the slice is useful and verifiable on its own. A change that only works once a later ticket lands is a layer, not a slice: merge it into the slice it serves.
 
-A request that fails the rule is re-scoped (a spec, or tickets), not implemented partially. `afk-triage` and `afk-to-tickets` both gate on this rule: a ticket too large for one fresh agent context goes to `ready-for-human`, never to `ready-for-agent`.
+A request that fails the rule is re-scoped (a spec, or tickets), not implemented partially. `afk-triage` and `afk-to-tickets` both gate on this rule: a ticket too large for one fresh agent context is never `ready-for-agent` as it stands. The skill splits it, on a product owner specialist's verdict (§ Delegated decisions), into a first slice it briefs and follow-up issues it files.
 
 ## Label state machine
 
@@ -114,7 +114,7 @@ When no risk label is set, infer one:
 - `risk-medium` — an ordinary single-area change that ships with tests (also the default reading of unset).
 - `risk-low` — docs-only, test-only, typo, or isolated cosmetic changes.
 
-When signals conflict, pick the higher label and say why in the label comment. A `risk-high` PR strengthens the case for `needs-qa` and deeper review even when it would otherwise look routine, and it puts the issue out of reach of every unattended implementing skill.
+When signals conflict, pick the higher label and say why in the label comment. A `risk-high` PR strengthens the case for `needs-qa` and deeper review even when it would otherwise look routine, and it sends the issue past a security and tenancy specialist (§ Delegated decisions) before any unattended implementing skill may take it.
 
 ## Intake labels
 
@@ -125,12 +125,12 @@ Intake labels go on issues only, one at a time, and say who acts on the issue ne
 | `needs-triage`    | Groomed and ready by the Definition of Ready, but not yet evaluated for an agent                                              | Humans; `afk-architecture-review` for its `Strong` candidates     |
 | `needs-info`      | Waiting on the reporter                                                                                                       | `afk-triage`, humans                                              |
 | `ready-for-agent` | Briefed and safe to implement unattended. Where `## This repository` says so, adding it launches the implementing automation. | `afk-triage`, `afk-to-tickets` (frontier tickets only), humans    |
-| `ready-for-human` | Briefed, but needs a person: security, `risk-high`, a spec, a duplicate, a decline, or a judgement call                       | `afk-triage`, `afk-to-tickets`, `afk-architecture-review`, humans |
+| `ready-for-human` | Briefed, but needs a person: only the cases `.ai/skills/afk-decide/SKILL.md` § 5 reserves, or an issue that should be closed  | `afk-triage`, `afk-to-tickets`, humans                            |
 
 - **Transitions:** an issue labeled `needs-triage` moves to exactly one of `needs-info`, `ready-for-agent` or `ready-for-human`. When the reporter answers a `needs-info` issue, a human moves it back to `needs-triage`, and triage runs again. Re-triaging a decided issue means removing `ready-for-agent` or `ready-for-human` first, then adding `needs-triage`.
 - **Grooming comes first.** `om-auto-manage-issues` owns `issue.opened` and adds the SDLC labels and the Definition of Ready check. `afk-triage` answers the `needs-triage` label instead, so the two never groom one issue at the same time.
 - **Grooming does not yet hand the issue on, and that is the open gap in this process.** A finished groom records `READY_STATUS` and stops; grooming applies no `needs-triage`, so an issue that arrives through the issue form waits for a human to add an intake or trigger label before anything else happens. The only skill that sets the label is `afk-architecture-review`, on the `Strong` candidates it raises itself — it never reaches a groomed issue, so it does not close this gap. The intended edge — a groom that ends `READY_STATUS=ready` applies `needs-triage` as its last mutation — is designed but not wired; it is specified in the cezar repository's `.ai/specs/2026-09-17-afk-intake-bridge.md`, and until it lands, read every "the pipeline picks it up" below as "a human picks it up".
-- **Limits on skills:** automated skills never add `ready-for-agent` to `risk-high` or `security` work, and never close an issue. Consuming `needs-triage` is exactly what `afk-triage` is for, so that one label it may remove; `ready-for-agent` and `ready-for-human` are terminal, and a skill never removes either once a human set it.
+- **Limits on skills:** automated skills add `ready-for-agent` to `risk-high` or `security` work only on a security and tenancy specialist's approving verdict, recorded in the brief with its conditions as acceptance criteria. They never close an issue. Consuming `needs-triage` is exactly what `afk-triage` is for, so that one label it may remove; `ready-for-agent` and `ready-for-human` are terminal, and a skill never removes either once a human set it.
 - **Human override:** a human may move any issue to any intake label at any time.
 
 ## Trigger labels
@@ -189,6 +189,10 @@ Two properties bound the whole unattended loop, and both are worth stating plain
 ## Unattended decisions
 
 The `afk-*` skills (`.ai/skills/`) run with no human to ask. Where a person would be consulted, the skill picks the most reversible reasonable option and records it as a row in a **Resolved assumptions** table (`# | Question | Applied default | Why`) in the brief, spec or PR body it writes. Humans review those rows at the PR, and overturning one is an ordinary review finding. Domain terms and decisions follow `afk-domain-modeling`: `CONTEXT.md` is updated in the same change, and ADRs are written only when a decision is hard to reverse, surprising, and a real trade-off.
+
+### Delegated decisions
+
+A choice between options is not a reason to stop or to hand an issue to a person. An unattended skill that would present options, a "Decision for the implementer", a "human's call" or a `ready-for-human` label hands the question to an **independent specialist sub-agent** instead (product owner, software architect, security and tenancy, accessibility and UX, test engineer, or configuration guardian), applies the verdict, records it as a Resolved assumptions row, and continues the work in the same run. The protocol, the verdict format and the short list of cases that still need a person are in `.ai/skills/afk-decide/SKILL.md`. A skill that stops on a question this protocol could settle is a defect to fix in the skill.
 
 A state an unattended pipeline can enter needs an exit that does not require a human to type something. When a state's only on-by-default exit is a person noticing it, work accumulates there silently: name the exit when the state is introduced, or do not introduce the state.
 
@@ -282,7 +286,7 @@ else is never read as a prompt without a maintainer stepping in.
 
 - Nothing merges automatically: no workflow uses `om-approve-merge-pr`.
 - `implement-ticket` stops when three or more agent PRs already wait in `review`.
-- Triage never sends `risk-high` or `security` work to an agent.
+- Triage sends `risk-high` or `security` work to an agent only on a security and tenancy specialist's approving verdict (§ Delegated decisions); the PR is still never merged automatically.
 - Every skill carries hard caps: one issue per triage, eight tickets per spec, three architecture
   issues, one lessons PR.
 - The committed definitions in `.ai/automations/` are the source; the cockpit's

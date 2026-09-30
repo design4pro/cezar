@@ -6,7 +6,7 @@
   "intervalSeconds": 600,
   "filters": {
     "changedLabels": ["ready-for-agent"],
-    "excludeLabels": ["in-progress", "ready-for-human", "needs-info", "blocked", "do-not-merge", "risk-high", "security"],
+    "excludeLabels": ["in-progress", "ready-for-human", "needs-info", "blocked", "do-not-merge"],
     "maxRecords": 25,
     "lookbackDays": 7
   },

@@ -49,7 +49,7 @@ Apply the **deletion test** to every suspect.
 
 For each candidate, write: Modules, Problem, Proposed deepening (plain English, no interface design yet), Wins (locality, leverage, what tests get simpler), and **Strength**:
 - `Strong`: the deletion test concentrates complexity, and the area is a hot spot.
-- `Worth exploring`: real friction, but the fix involves a judgement call or a `risk-high` area (see SDLC.md).
+- `Worth exploring`: real friction, but the fix involves a judgement call or a `risk-high` area (see SDLC.md). Settle the judgement call through `.ai/skills/afk-decide/SKILL.md` (the software architect, plus the security and tenancy specialist for a `risk-high` area) and file it with the verdict in its Resolved assumptions.
 - `Speculative`: plausible but unproven. Do not file these; only list them in the run report.
 
 A candidate that contradicts an accepted ADR is filed only when the friction is severe. Then say which ADR it would reopen and why.
@@ -74,7 +74,9 @@ A candidate that contradicts an accepted ADR is filed only when the friction is 
 |---|---|---|---|
 ```
 
-Labels: `refactor`, and a risk label from SDLC.md. `Strong` also gets `needs-triage`, so `afk-triage` writes the brief. `Worth exploring` gets `ready-for-human`. Never add `ready-for-agent` yourself.
+Labels: `refactor`, and a risk label from SDLC.md. `Strong` and `Worth exploring` both get `needs-triage` in a second call after the issue exists, so `afk-triage` writes the brief. Never add `ready-for-agent` yourself.
+
+**A security defect is not a refactor candidate and not capped.** When you find one (data crossing a tenant or privacy boundary, a missing authorization check, a leaked secret), file it as its own issue labeled `security` and `bug`, outside the three-issue cap, then add `needs-triage` in a second call. Never leave one only in the run report.
 
 ## Done when
 
