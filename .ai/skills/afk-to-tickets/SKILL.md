@@ -20,9 +20,9 @@ Load `.ai/agentic.config.json` and `.ai/trackers/github.md`, and use their opera
 A **parent** is an open issue whose body starts with `Spec: .ai/specs/`. For each parent, look at its tickets (sub-issues, or the parent's checklist when sub-issues are unavailable). A ticket is on the **frontier** when all three hold:
 - it has no intake label;
 - every issue in its `## Blocked by` is closed;
-- it is not `risk-high`.
+- it is not already carrying a `ready-for-human` a human set.
 
-Add `ready-for-agent` to each frontier ticket, with a comment naming the blockers that closed. A frontier ticket that is `risk-high` gets `ready-for-human` instead.
+Add `ready-for-agent` to each frontier ticket, with a comment naming the blockers that closed. A frontier ticket that is `risk-high` or `security` first gets a verdict from the security and tenancy specialist through `.ai/skills/afk-decide/SKILL.md`, which reads the ticket and the diff it implies (a comment-only or docs-only change on a `risk-high` path is not a risk-high change). Put the verdict and its CONDITIONS in the comment, then add `ready-for-agent`. Add `ready-for-human` only for a case `afk-decide` § 5 reserves for a person. Report each frontier decision once: a ticket you already commented on with the same verdict is skipped silently on later runs.
 
 ## 2. Pick the spec
 
@@ -47,7 +47,7 @@ Give every ticket its **blocking edges**: only the tickets that genuinely gate i
 - Does any ticket depend on another only by habit?
 - Does every acceptance criterion trace back to the spec?
 
-Fix what fails, and record each judgement call as a row in a Resolved assumptions table.
+Fix what fails. Settle every judgement call through `.ai/skills/afk-decide/SKILL.md`, and record each verdict as a row in a Resolved assumptions table. Never write "a human's call" into a ticket: a ticket that carries an open question cannot be groomed ready.
 
 ## 4. Publish
 
