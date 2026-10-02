@@ -16,6 +16,7 @@ import { claudeSessionSaved } from '../core/claude-sessions.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { reapRunProcesses } from '../core/run-reaper.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
+import { AUTH_REFRESH_RETRY_DELAY_MS, isTransientAuthRefreshFailure } from '../core/auth-refresh.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
@@ -1077,6 +1078,7 @@ export class RunManager {
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
   private readonly turnInactivityMs: number;
+  private readonly authRefreshRetryDelayMs: number;
 
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
@@ -1095,10 +1097,13 @@ export class RunManager {
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
       /** `TURN_INACTIVITY_TIMEOUT_MS` unless a test needs it short. */
       turnInactivityMs?: number;
+      /** `AUTH_REFRESH_RETRY_DELAY_MS` unless a test needs it short. */
+      authRefreshRetryDelayMs?: number;
     } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.turnInactivityMs = options.turnInactivityMs ?? TURN_INACTIVITY_TIMEOUT_MS;
+    this.authRefreshRetryDelayMs = options.authRefreshRetryDelayMs ?? AUTH_REFRESH_RETRY_DELAY_MS;
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
@@ -2893,6 +2898,18 @@ export class RunManager {
    * would be a cost brake that stops the one run that was only supervising. The answer is still
    * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
    */
+  /** Sleep `ms`, waking early when the run is cancelled (cancel calls `state.interrupt`). */
+  private async waitUnlessCancelled(state: ActiveRun, ms: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      state.interrupt = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+    });
+    state.interrupt = () => undefined;
+  }
+
   cancel(runId: string): boolean {
     this.cancelDescendants(runId, new Set([runId]));
     return this.cancelOne(runId);
@@ -4239,6 +4256,7 @@ export class RunManager {
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
     const retriesUsed = new Map<string, number>();
+    const authRefreshRetried = new Set<string>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
     // `startRun` already persisted the task's attachments so a queued bubble can render them
@@ -4319,6 +4337,22 @@ export class RunManager {
         startAttachments = [];
         checkFailure = null;
         if (state.cancelled) break;
+        // A transient OAuth refresh failure (`core/auth-refresh.ts`) gets one more attempt of
+        // the same step a minute later. It is not a usage limit: there is no reset instant and
+        // nothing to resume, only a lock another Claude Code process held at the wrong moment.
+        if (failure && isTransientAuthRefreshFailure(failure) && !authRefreshRetried.has(step.id)) {
+          authRefreshRetried.add(step.id);
+          this.finishStep(runId, step.id, 'failed', failure, emit);
+          emit({
+            type: 'note',
+            stepId: step.id,
+            message: `Claude Code could not refresh its login token — retrying "${step.id}" in ${Math.round(this.authRefreshRetryDelayMs / 1000)} s`,
+          });
+          await this.waitUnlessCancelled(state, this.authRefreshRetryDelayMs);
+          if (state.cancelled) break;
+          this.store.updateStep(runId, step.id, { status: 'pending' });
+          continue;
+        }
         if (failure) {
           this.finishStep(runId, step.id, 'failed', failure, emit);
           runError = `step "${step.id}" failed: ${failure}`;
