@@ -6,7 +6,7 @@
 // events + a terminal `result`), and exits when stdin closes (EOF).
 
 import { createInterface } from 'node:readline';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
@@ -193,6 +193,29 @@ async function respond(userText, imageCount) {
       subtype: 'success',
       is_error: true,
       result: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      usage: { input_tokens: 0, output_tokens: 0 },
+      total_cost_usd: 0,
+    });
+    return;
+  }
+
+  // `mock:auth-refresh` → the transient refresh-lock failure Claude Code 2.1.285 reported on
+  // 2026-10-02, on every attempt. `mock:auth-refresh-once` fails only the first session started in
+  // this cwd (a marker file remembers it), so the engine's one retry can be seen to succeed.
+  const refreshOnceMarker = '.mock-auth-refresh-failed';
+  const refreshOnce = userText.includes('mock:auth-refresh-once');
+  if (
+    userText.includes('mock:auth-refresh') &&
+    !(refreshOnce && existsSync(refreshOnceMarker))
+  ) {
+    if (refreshOnce) writeFileSync(refreshOnceMarker, '');
+    emit({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      result:
+        'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. ' +
+        'This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again',
       usage: { input_tokens: 0, output_tokens: 0 },
       total_cost_usd: 0,
     });
