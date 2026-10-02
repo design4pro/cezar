@@ -4,11 +4,12 @@ Everything under `host/` is applied to a machine, not rendered into a repository
 generated and nothing verifies it: a green CI run in this repository means nothing about a host
 that has not been touched. The `__PLACEHOLDER__` substitutions below are the whole mechanism.
 
-Two services live here:
+Three services live here:
 
 ```
 host/launchd/dev.cezar.cockpit.plist    the cockpit: one `cezar serve` per host (LaunchAgent)
 host/runner/                            the self-hosted GitHub Actions runner pool (systemd, VPS)
+host/reconciler/                        the reconciler: one cron tick that repairs and starts unattended tasks
 ```
 
 The cockpit is one per host and serves every registered project, so host state belongs with the
@@ -254,3 +255,114 @@ A host or daemon restart can fail an in-flight job; the supervisor recovers slot
 If a full drain is required, first move job routing to GitHub-hosted runners with the kill switch
 and confirm no busy runners in the organisation API before removing idle containers. Restore
 routing only after new registrations and a canary job succeed.
+
+## The reconciler
+
+`host/reconciler/reconcile.mjs` is the one process that starts unattended work (ADR 0009). It is a
+Node script with no dependencies and no daemon: cron runs one **tick** every ten minutes, the tick
+reads the cockpit, each managed repository and GitHub, acts, and exits. Nothing is held between
+ticks except a small state file, and the engine is untouched - everything it does is an HTTP route
+the cockpit already serves, a `git` call, or a `gh api` REST call.
+
+```
+node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N]
+```
+
+- `--project <id>=<path>`: a managed project, by its cockpit id and its checkout. Repeat it; the
+  order is the priority, so the first project gets the free slots first.
+- `--dry-run`: decide and print one line per decision. It reads everything and changes nothing: no
+  merge, no POST to the cockpit, no write to GitHub, no state file. The digest is printed, not
+  published.
+- `--max-launch N`: start at most N runs this tick, repairs included.
+- `CEZ_API`: the cockpit's address (default `http://127.0.0.1:4321`), the same variable the repos'
+  `housekeeping.sh` reads. `GH_CONFIG_DIR` on the cron line makes `gh` act as another GitHub login.
+- An unknown argument exits 2 with the usage text, so a typo on the cron line fails loudly.
+
+### Installing it
+
+Under `flock`, so a slow tick never overlaps the next. The cron needs no `CRON_TZ` and no
+Warsaw-hour guard like the housekeeping lines: the digest does its own Europe/Warsaw arithmetic.
+
+```cron
+*/10 * * * * mkdir -p $HOME/.cache/cez && flock -n $HOME/.cache/cez/reconcile.lock node /home/ubuntu/dev/cezar/host/reconciler/reconcile.mjs --project planned-travel=/home/ubuntu/dev/planned.travel --project money-tracker-online=/home/ubuntu/dev/money-tracker.online >> $HOME/.cache/cez/reconcile.log 2>&1
+```
+
+Run it once with `--dry-run` first and read what it says. **To stop it, remove the cron line.** There
+is nothing else to switch off: no automation, no service, no label.
+
+### What one tick does
+
+A tick first asks the cockpit for its health: if it does not answer, the tick logs that and exits 0,
+because a restarting cockpit is not a cron failure. Then it works out the **capacity** and goes
+through the managed projects in order.
+
+**Capacity** is the workspace's `maxParallel` minus the runs that hold or wait for a slot, counted
+across every project the cockpit has registered, managed or not (`slotsHeld`,
+`host/reconciler/reconcile.mjs:72`). It counts them the way the engine's own `busySlots` does
+(`packages/cezar/src/workflows/run.ts`): a `running` run and a `queued` run hold a slot; a
+`waiting` run holds none (#347); a run that is `running` with `activity: monitoring` holds none up
+to `maxMonitoringSessions`; a `review` run has closed its session. A repair, a retried receipt and a
+launch each spend one unit; when it is gone the tick says "no free slot" for the rest.
+
+**A usage limit stops everything.** If any run in any project is parked on a provider's usage limit
+(`isParkedOnUsageLimit`, `reconcile.mjs:87`: a `failed` run with the engine's booked `autoResumeAt`,
+or the `Claude AI usage limit reached|<epoch>` envelope while its reset is still ahead), the tick
+launches nothing and repairs nothing, because the account has no window and a new run would only
+join the queue of failures. The engine resumes that run itself; the next tick after it has done so
+carries on. The digest is still published.
+
+Then, per managed project and in this order:
+
+1. **Sync.** Fast-forward the main checkout to `origin/<baseBranch>` and, when
+   `docs/agents/cezar-automations.json` changed, re-apply the automations with the repo's own
+   `cez-automations.sh`. It leaves the checkout alone when it is not on the base branch or is dirty,
+   and when an enabled automation polls within 60 seconds (SDLC.md § Repo automations: a poll reads
+   the working tree). A sync that cannot happen is logged and the tick goes on.
+2. **Repair.** Only a run that is `failed`, was started unattended (`autonomous`), finished within
+   the last 48 hours, is not archived, was not cancelled, and is the newest run of its workflow and
+   task (a newer run has taken the work over). The ladder, per run id:
+   - attempt 1 and 2: a run with a session is **continued** (`POST /runs/:id/continue`) with a text
+     that names the failed step and tells the agent to finish it and every later step itself; attempt
+     2 also asks for an independent root-cause specialist sub-agent. A run with no session (its
+     bootstrap failed, or the provider lost the session) is **relaunched** as a new run of the same
+     workflow and task, and the attempt count follows it to the new run id;
+   - after two attempts it **escalates once**: a `🤖 HUMAN-ONLY:` comment on the issue the task
+     names (or the one the run recorded) and the `blocked` label, both through `gh api` REST. The
+     unblock sweep reads that pair the same way it reads every other hold. A run that names no issue
+     is left to the digest;
+   - an error repeating cannot help (no `claude` on the PATH, no credentials, an unknown workflow)
+     is never retried: it goes to the digest only.
+   Launch-error receipts of the last 48 hours are retried once through
+   `POST /automation-log/:id/retry`.
+3. **Launch.** The target repository answers `node .ai/scripts/backlog-status.mjs --plan` (cwd is the
+   project root) with `{"wip":{...},"actions":[{"kind","target","workflow","task"}]}`: at most one
+   action per kind, already in priority order (implement, unblock, triage, slice, write-spec).
+   The tick starts them in that order, skipping a target an active run already names (`#12` is not
+   `#123`), a target whose run failed or was cancelled in the last 48 hours (so a target nobody
+   can fix is not relaunched every ten minutes), a target the same workflow finished as `done` in
+   the last 6 hours (the agent judged it finished, so repeating it every tick only spends runs), a
+   project that already has two runs holding a slot (a monitoring or waiting run holds none), and
+   anything past the capacity or `--max-launch`. Starts are 20 seconds apart: two Claude Code
+   processes launched in the same second race on the OAuth refresh (PR #50). A repo whose script
+   fails or does not know `--plan` launches nothing, and the tick says so.
+4. **Digest.** At most once per Warsaw day, on the first tick at or after 07:00 Europe/Warsaw (the
+   hour and the date come from `Intl`, so both clock changes are right whatever zone the host runs
+   in), the body of the open issue titled exactly `Pipeline status` is replaced: the backlog by
+   state, what waits for a person (held issues, pull requests needing QA or a risk decision), the
+   unattended runs of the last 24 hours that failed, were escalated or were not retryable, and
+   what finished. The issue is created with `do-not-close` when it is missing. It is one issue,
+   edited in place, so it never grows a comment thread.
+
+### State
+
+`~/.cache/cez/reconcile-state.json`: repair attempts and escalations per run id, the receipt ids
+already retried, the date of the last digest per project. It is written atomically (tmp + rename),
+entries older than two weeks are dropped, and a missing or corrupt file degrades to empty. Deleting
+it costs nothing worse than a failed run getting its two repairs again and one extra digest.
+
+### What it never does
+
+It never merges a PR, never closes an issue, never edits an issue other than the escalation's label
+and comment and the digest, and never touches `packages/`. A repository the cockpit has registered
+but the tick was not told to manage still counts toward capacity and the usage-limit pause, and is
+otherwise left alone.

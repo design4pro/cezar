@@ -168,6 +168,10 @@ The instant an automation was enabled. Nothing older than it ever launches.
 **Occurrence**:
 One fire time of a schedule. A missed occurrence may fire once, as a catch-up.
 
+**Reconciler**:
+The host script that cron runs every ten minutes to repair failed unattended tasks and start what each managed repository's backlog asks for, within the workspace's free slots (ADR 0009). It reads the present state and keeps no baseline, so a missed event cannot strand work.
+_Avoid_: dispatcher, scheduler
+
 ### Delivery process
 
 **Ready**:
