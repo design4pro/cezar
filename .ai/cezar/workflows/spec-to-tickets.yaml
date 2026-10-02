@@ -2,7 +2,7 @@
 # DEFAULT_ALLOWED_TOOLS, which has no `Agent`: the skill settles open questions through an
 # independent specialist sub-agent (.ai/skills/afk-decide/SKILL.md, SDLC.md § Delegated decisions).
 name: spec-to-tickets
-description: Promote the ticket frontier, then slice at most one merged spec into tracer-bullet tickets (afk-to-tickets).
+description: Slice at most one merged spec into tracer-bullet tickets, each carrying its Agent Brief in the body (afk-to-tickets).
 steps:
   - id: afk-to-tickets
     name: afk-to-tickets

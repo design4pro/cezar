@@ -1,22 +1,28 @@
 name: implement-ticket
-description: Implement one ready-for-agent issue test-first from its Agent Brief, pass the validation gate, open a PR and review it. Never merges.
+description: Implement one ready issue test-first from its Agent Brief, pass the validation gate, open a PR and review it. Never merges.
+# Started every two hours by "Implement the next ready issue" with no issue in the task, or by a
+# person from the cockpit with one. No label marks an issue ready (ADR 0008): readiness is computed
+# by .ai/scripts/backlog-status.mjs, the same rule the backlog report shows.
 steps:
   - id: implement
-    name: Check readiness and implement
+    name: Pick the issue, check readiness and implement
     skill: om-fix
     # Agent: open questions go to an independent specialist sub-agent (.ai/skills/afk-decide/SKILL.md).
     allowedTools: [Read, Edit, Write, Grep, Glob, Bash, Agent]
     prompt: |
       {{task}}
 
-      This workflow has no om-root-cause step: the issue's `## Agent Brief` comment is your brief.
+      This workflow has no om-root-cause step: the issue's `## Agent Brief` (a triage comment, or the body of a ticket `afk-to-tickets` filed) is your brief.
+
+      Pick the issue. When the task names an issue number, that is the issue. Otherwise run `node .ai/scripts/backlog-status.mjs --next`: it prints the number of the one issue to implement, or nothing when no issue is ready or three agent PRs are already open (the WIP limit). Write `ISSUE: #<number>` as the first progress-log line of this run's handoff file; later steps read it.
 
       Check readiness before claiming. Stop without changing anything if any of these hold:
-      - the issue is closed, or carries `in-progress`, `ready-for-human`, `needs-info` or `blocked`;
-      - it has no Agent Brief comment;
+      - `--next` printed nothing;
+      - the issue is closed, or carries `in-progress`, `blocked`, `do-not-merge` or `do-not-close`;
+      - it has no Agent Brief;
       - an issue listed under "Blocked by" is still open;
-      - three or more open PRs labeled `review` are authored by the current `gh` user (WIP limit).
-      To stop: write `STOP: <reason>` as the first progress-log line of this run's handoff file, then end with CEZ:DONE. Later steps read that line and skip.
+      - an open PR already addresses it.
+      To stop: write `STOP: <reason>` as a progress-log line of this run's handoff file, right after the `ISSUE:` line when there is one, then end with CEZ:DONE. Later steps read that line and skip. When you stop on an issue that `--next` picked, also post a 🤖 comment on it containing `STOP: <reason>`: `backlog-status.mjs` reads it as not ready until a person answers, so the schedule does not pick the same issue every tick.
 
       Otherwise implement per om-fix, with these rules:
       - When the brief's deliverable is a spec (afk-triage briefs a request too large for a few slices that way), write that spec under `.ai/specs/` in the shape of the existing specs instead of code; `afk-to-tickets` slices it once it merges.
@@ -24,7 +30,7 @@ steps:
       - Build one complete vertical slice, inside the acceptance criteria and "Out of scope" (SDLC.md, Scoping rule (SLC)).
       - Use CONTEXT.md terms. Add or update entries for any concept you introduce or rename (afk-domain-modeling).
       - Settle each decision the brief left open through `.ai/skills/afk-decide/SKILL.md` instead of stopping, and record each verdict as a Resolved assumptions row in the handoff file, for the PR body.
-      - For a `risk-high` or `security` issue, the brief must carry the security and tenancy specialist's approving verdict; meet its CONDITIONS as acceptance criteria. Without that verdict, get one through `afk-decide` before claiming.
+      - For a `risk-high` or `security` issue, the brief must carry the security and tenancy specialist's approving verdict; meet its CONDITIONS as acceptance criteria. Without that verdict, get one through `afk-decide` before claiming. If the specialist does not approve, STOP: do not claim; add `blocked` to the issue and post a 🤖 comment with the verdict and the one thing a person has to decide.
       - A lesson worth keeping goes in a `## Lessons` section of the handoff file and the PR body, never into files outside the repository; `afk-lessons` collects it.
   - id: gate
     name: Validation gate
@@ -38,9 +44,9 @@ steps:
     prompt: |
       {{task}}
 
-      If the first progress-log line of this run's handoff file starts with `STOP:`, end at once with CEZ:DONE.
+      If a progress-log line of this run's handoff file starts with `STOP:`, end at once with CEZ:DONE.
 
-      Otherwise open the PR per om-open-pr, with the issue number from the task as the issue id. Put the Resolved assumptions table from the handoff file in the PR body, and reference the issue with `Fixes #<number>`.
+      Otherwise open the PR per om-open-pr, with the issue number from the handoff file's `ISSUE:` line as the issue id. Put the Resolved assumptions table from the handoff file in the PR body, and reference the issue with `Fixes #<number>`.
   - id: review
     name: Review the PR
     skill: om-auto-review-pr
@@ -48,7 +54,7 @@ steps:
       {{task}}
 
       End at once with CEZ:DONE if either holds:
-      - the first progress-log line of this run's handoff file starts with `STOP:`;
+      - a progress-log line of this run's handoff file starts with `STOP:`;
       - no PR is open for this branch (`gh pr list --head "$(git branch --show-current)"`).
 
       Otherwise review that PR per om-auto-review-pr:

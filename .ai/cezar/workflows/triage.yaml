@@ -2,7 +2,7 @@
 # DEFAULT_ALLOWED_TOOLS, which has no `Agent`: the skill settles open questions through an
 # independent specialist sub-agent (.ai/skills/afk-decide/SKILL.md, SDLC.md § Delegated decisions).
 name: triage
-description: Triage one GitHub issue unattended - verify, write an Agent Brief, set one intake label (afk-triage).
+description: Triage one GitHub issue unattended - verify, then write the Agent Brief that makes it ready or put a `blocked` hold on it (afk-triage).
 steps:
   - id: afk-triage
     name: afk-triage

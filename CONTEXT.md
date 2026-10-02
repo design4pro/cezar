@@ -170,11 +170,16 @@ One fire time of a schedule. A missed occurrence may fire once, as a catch-up.
 
 ### Delivery process
 
-**Intake label**:
-The one label on an issue that says who acts next: `needs-triage`, `needs-info`, `ready-for-agent` or `ready-for-human`.
+**Ready**:
+An issue an unattended implementing run may take: a maintainer opened it, it carries an Agent Brief, a category, a priority and a risk, its blockers are closed, no pull request addresses it, no not-ready or `STOP:` comment waits for an answer, and it is under no hold. Computed from what is on the issue, never set as a label (ADR 0008).
+_Avoid_: ready-for-agent, intake label, intake ladder, frontier
+
+**Hold**:
+`blocked`, `do-not-merge` or `do-not-close` on an issue: nothing unattended starts on it. A skill that sets `blocked` posts a comment naming the one thing a person must do, and only a person clears a hold.
+_Avoid_: ready-for-human, needs-info
 
 **Agent Brief**:
-The durable issue comment an agent implements from: current and desired behaviour, key interfaces, test seam, acceptance criteria, out of scope.
+The durable brief an agent implements from, in a triage comment or in the body of a ticket: current and desired behaviour, key interfaces, test seam, acceptance criteria, out of scope.
 
 **Resolved assumptions**:
 The table in which an unattended agent records each decision it made instead of asking.
@@ -185,17 +190,6 @@ _Avoid_: "a human's call", "decision for the implementer" for a question a speci
 
 **Ticket**:
 An issue that is one tracer-bullet slice of a spec: narrow, but complete on its own, with explicit blocking edges.
-
-**Frontier**:
-The tickets whose blockers are all closed.
-
-**Ladder**:
-An ordered set of labels an issue climbs on its way to a pull request, and the automations that answer them. The **intake ladder** is the pipeline's own — `needs-triage` to `ready-for-agent` to an implementing run — and a **trigger label** is the parallel lever a human pulls instead. Say which ladder.
-_Avoid_: pipeline (for this), track, funnel
-
-**Bridge**:
-The one edge that makes the intake ladder self-feeding: a groom that ends `READY_STATUS=ready` applies `needs-triage` as its last mutation, so nothing waits for a person to label a ready issue. Designed in `.ai/specs/2026-09-17-afk-intake-bridge.md`; not yet wired in any repository.
-_Avoid_: hook, glue, handoff (that word is already taken)
 
 ### Words with more than one meaning
 

@@ -74,9 +74,9 @@ A candidate that contradicts an accepted ADR is filed only when the friction is 
 |---|---|---|---|
 ```
 
-Labels: `refactor`, and a risk label from SDLC.md. `Strong` and `Worth exploring` both get `needs-triage` in a second call after the issue exists, so `afk-triage` writes the brief. Never add `ready-for-agent` yourself.
+Labels: `refactor`, and a risk label from SDLC.md. Opening the issue starts its triage run, so `afk-triage` writes the brief for `Strong` and `Worth exploring` alike. Never write the Agent Brief yourself (ADR 0008).
 
-**A security defect is not a refactor candidate and not capped.** When you find one (data crossing a tenant or privacy boundary, a missing authorization check, a leaked secret), file it as its own issue labeled `security` and `bug`, outside the three-issue cap, then add `needs-triage` in a second call. Never leave one only in the run report.
+**A security defect is not a refactor candidate and not capped.** When you find one (data crossing a tenant or privacy boundary, a missing authorization check, a leaked secret), file it as its own issue labeled `security` and `bug`, outside the three-issue cap; opening it starts its triage run. Never leave one only in the run report.
 
 ## Done when
 
