@@ -1,10 +1,10 @@
 {
   "name": "Spec to tickets",
-  "description": "Weekday mornings: promote ticket frontiers, then slice at most one newly merged spec into tickets.",
+  "description": "Weekday mornings: slice at most one newly merged spec into tickets, each carrying its Agent Brief in the body. A ticket with no open blocker is ready at once, and \"Implement the next ready issue\" takes it; the rest become ready as their blockers close (ADR 0008).",
   "kind": "schedule",
   "schedule": { "type": "weekdays", "hour": 7, "minute": 0 },
   "task": {
-    "prompt": "Run the afk-to-tickets skill for {{project}} on {{date}}: promote the frontier, then slice at most one unsliced spec.",
+    "prompt": "Run the afk-to-tickets skill for {{project}} on {{date}}: slice at most one unsliced spec.",
     "workflow": "spec-to-tickets",
     "worktree": true,
     "autonomous": true,

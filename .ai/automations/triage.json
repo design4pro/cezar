@@ -1,13 +1,13 @@
 {
   "name": "Triage new issues",
-  "description": "Brief every new issue, or one moved back to needs-triage, and set exactly one intake label. SDLC.md § Intake labels. `authors` is the gate: this repository is public and the run holds Bash with no allowlist, so an issue from anyone else is never triaged automatically. The gate matches the issue's author, not the labeller, so adding `needs-triage` to an outside issue does not trigger a run either - triage that one by hand.",
+  "description": "A maintainer opens an issue, or a person removes `blocked` from one, and afk-triage writes its Agent Brief or puts a `blocked` hold on it with a 🤖 comment naming the one thing a person must do. No label says an issue is ready: `.ai/scripts/backlog-status.mjs` reads the brief (ADR 0008, SDLC.md § Readiness). `authors` is the gate: this repository is public and the run holds Bash with no allowlist, so an issue from anyone else is never triaged automatically. The gate matches the issue's author, not the person who removed the label, so clearing a hold on an outside issue does not trigger a run either - triage that one from the cockpit. `changedLabels` narrows the label event only; `issue.opened` matches without it.",
   "kind": "github",
-  "events": ["issue.opened", "issue.labeled"],
+  "events": ["issue.opened", "issue.unlabeled"],
   "intervalSeconds": 600,
   "filters": {
     "authors": ["rafalwolak"],
-    "changedLabels": ["needs-triage"],
-    "excludeLabels": ["in-progress", "do-not-close", "blocked", "needs-info", "ready-for-agent", "ready-for-human"],
+    "changedLabels": ["blocked"],
+    "excludeLabels": ["in-progress", "do-not-close", "blocked", "do-not-merge"],
     "maxRecords": 25,
     "lookbackDays": 7
   },

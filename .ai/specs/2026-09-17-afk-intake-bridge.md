@@ -1,5 +1,11 @@
 # The AFK intake bridge
 
+> **Superseded on 2026-10-02 by ADR 0008** (`docs/adr/0008-open-mercato-labels-only.md`). The
+> intake labels, the trigger labels and the bridge are retired: no label says an issue is ready,
+> `.ai/scripts/backlog-status.mjs` computes readiness, and a two-hour schedule starts
+> `implement-ticket`. This spec is kept as the design record and is not updated. P6's CI gap for
+> `design4pro` is outside that ADR and still stands.
+
 > Status: draft
 > Scope: `cezar`, `planned.travel`, `money-tracker.online` — the three repositories that share
 > `design4pro/agent-kit` (kitVersion 42) and the `SDLC.md` skeleton converged on 2026-09-17.

@@ -1,17 +1,10 @@
 {
-  "name": "Implement ready-for-agent issues",
-  "description": "An issue labeled ready-for-agent is implemented test-first in a worktree, gated, opened as a PR and reviewed. Never merges. SDLC.md § Repo automations.",
-  "kind": "github",
-  "events": ["issue.labeled"],
-  "intervalSeconds": 600,
-  "filters": {
-    "changedLabels": ["ready-for-agent"],
-    "excludeLabels": ["in-progress", "ready-for-human", "needs-info", "blocked", "do-not-merge"],
-    "maxRecords": 25,
-    "lookbackDays": 7
-  },
+  "name": "Implement the next ready issue",
+  "description": "Every two hours implement-ticket takes the one highest-priority, oldest ready issue as `node .ai/scripts/backlog-status.mjs --next` picks it - opened by the maintainer, carrying an Agent Brief, a category, a priority and a risk, with every \"Blocked by\" issue closed, no open PR, no unanswered not-ready or `STOP:` comment, and none of `blocked`, `do-not-merge`, `do-not-close` or `in-progress` - then implements it test-first in a worktree, gates it, opens the PR and reviews it. Never merges. The script answers nothing while three agent PRs are open, so one tick starts at most one issue and the queue never outruns review. A schedule rather than an event: a ticket becomes ready when its blockers close, and no GitHub event says so (ADR 0008, SDLC.md § Repo automations).",
+  "kind": "schedule",
+  "schedule": { "type": "hours", "every": 2 },
   "task": {
-    "prompt": "Implement issue #{{github.number}} ({{github.url}}).",
+    "prompt": "Implement the next ready issue in {{project}} ({{date}}).",
     "workflow": "implement-ticket",
     "worktree": true,
     "autonomous": true,

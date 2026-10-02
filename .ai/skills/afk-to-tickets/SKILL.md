@@ -1,6 +1,6 @@
 ---
 name: afk-to-tickets
-description: Slice a merged spec into tracer-bullet GitHub tickets with blocking edges, unattended, and promote the ticket frontier to ready-for-agent as blockers close. Use when a spec under .ai/specs/ has merged without tickets, when asked to break a spec or plan into issues, or to advance an existing ticket tree.
+description: Slice a merged spec into tracer-bullet GitHub tickets with blocking edges, unattended, each carrying the Agent Brief that makes it ready once its blockers close. Use when a spec under .ai/specs/ has merged without tickets, or when asked to break a spec or plan into issues.
 ---
 
 # AFK to tickets
@@ -9,29 +9,22 @@ description: Slice a merged spec into tracer-bullet GitHub tickets with blocking
 
 Adapted from mattpocock/skills `to-tickets` for unattended runs. The spec file stays the source of truth: tickets link to it and never copy it.
 
+No label marks a ticket ready (ADR 0008). Each ticket's body is its Agent Brief, and `.ai/scripts/backlog-status.mjs` treats it as ready once every issue under its `### Blocked by` is closed; the scheduled implement-ticket run takes it from there, in priority order.
+
 **Caps:** at most one spec and eight tickets per run. Never close, retitle or re-scope an existing issue.
 
 ## 0. Setup
 
 Load `.ai/agentic.config.json` and `.ai/trackers/github.md`, and use their operations and label guards. Read `CONTEXT.md` and the ADRs for the area. For vocabulary, read `.ai/skills/afk-domain-modeling/SKILL.md` and `.ai/skills/afk-codebase-design/SKILL.md`.
 
-## 1. Promote the frontier (every run, before slicing)
-
-A **parent** is an open issue whose body starts with `Spec: .ai/specs/`. For each parent, look at its tickets (sub-issues, or the parent's checklist when sub-issues are unavailable). A ticket is on the **frontier** when all three hold:
-- it has no intake label;
-- every issue in its `## Blocked by` is closed;
-- it is not already carrying a `ready-for-human` a human set.
-
-Add `ready-for-agent` to each frontier ticket, with a comment naming the blockers that closed. A frontier ticket that is `risk-high` or `security` first gets a verdict from the security and tenancy specialist through `.ai/skills/afk-decide/SKILL.md`, which reads the ticket and the diff it implies (a comment-only or docs-only change on a `risk-high` path is not a risk-high change). Put the verdict and its CONDITIONS in the comment, then add `ready-for-agent`. Add `ready-for-human` only for a case `afk-decide` § 5 reserves for a person. Report each frontier decision once: a ticket you already commented on with the same verdict is skipped silently on later runs.
-
-## 2. Pick the spec
+## 1. Pick the spec
 
 - When the task names a spec path or an issue, use that.
 - Otherwise, look at specs added under `.ai/specs/` on the base branch in the last 14 days: `git log --diff-filter=A --since="14 days ago" --name-only -- .ai/specs/`. Pick the oldest one that has no parent issue (**search-issues** for its path).
 - Skip specs whose status says draft or superseded.
 - No candidate: finish with `NO_ACTION_NEEDED`.
 
-## 3. Draft the slices
+## 2. Draft the slices
 
 Read the whole spec and explore the code it touches. Then draft **tracer-bullet** tickets:
 - Each ticket is a narrow but **complete** vertical path through every layer it needs (contract, server, cockpit, tests). A ticket that touches only one layer is not a slice; merge it into the one it serves.
@@ -49,34 +42,35 @@ Give every ticket its **blocking edges**: only the tickets that genuinely gate i
 
 Fix what fails. Settle every judgement call through `.ai/skills/afk-decide/SKILL.md`, and record each verdict as a row in a Resolved assumptions table. Never write "a human's call" into a ticket: a ticket that carries an open question cannot be groomed ready.
 
-## 4. Publish
+## 3. Publish
 
 1. **create-issue** for the parent, titled `<spec title>`. Body: `Spec: <spec path>` on the first line, then a checklist of the tickets, then the Resolved assumptions table.
 2. Create the tickets in dependency order, blockers first, so every edge names a real issue number. Body:
 
 ```md
-## Parent
-#<parent>
+## Agent Brief
 
-## What to build
+**Category:** <category> · **Priority:** <label> · **Risk:** <label>
+**Parent:** #<parent>
+
+### What to build
 <the end-to-end behaviour, from the user's perspective, in CONTEXT.md terms>
 
-## Test seam
+### Test seam
 <where the acceptance test belongs, in afk-codebase-design terms>
 
-## Acceptance criteria
+### Acceptance criteria
 - [ ] <criterion>
 
-## Blocked by
+### Blocked by
 - #<n>   (or: None - can start immediately)
 ```
 
-   No file paths or code snippets. Labels: the category, plus priority and risk inherited from the spec.
+   No file paths or code snippets. Labels: the category, plus priority and risk inherited from the spec. A `risk-high` or `security` ticket needs no verdict here: implement-ticket gets the security and tenancy specialist's verdict before it claims one.
 3. Link each ticket as a sub-issue: `gh api repos/{owner}/{repo}/issues/<parent>/sub_issues -F sub_issue_id=<ticket node id>`. If that call fails, the checklist in the parent is enough; carry on.
-4. Run step 1 again, so the tickets with no blockers become `ready-for-agent`.
 
 Every comment and issue body starts with `> *This was generated by AI from <spec path>.*`.
 
 ## Done when
 
-The spec has one parent and at most eight tickets with explicit blocking edges, and exactly the frontier carries `ready-for-agent`. Or the run ended with `NO_ACTION_NEEDED`. Finish with `Parent: #<n>` and the list of tickets.
+The spec has one parent and at most eight tickets, each with an Agent Brief and explicit blocking edges. Or the run ended with `NO_ACTION_NEEDED`. Finish with `Parent: #<n>` and the list of tickets.

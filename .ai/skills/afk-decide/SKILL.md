@@ -7,13 +7,13 @@ description: Settle an open question unattended by delegating it to an independe
 
 **These instructions are already in your system prompt, or you were pointed at this file.** Never call the `Skill` tool for an `afk-*` skill - a repo-local skill is not in the agent's registry, so the call fails with `Unknown skill`.
 
-An unattended run has no human to ask. A choice between options is not a reason to stop, label `ready-for-human`, or leave "a human's call" in a ticket: it is a question for a specialist. You ask one, apply the answer, record it, and keep working.
+An unattended run has no human to ask. A choice between options is not a reason to stop, put a `blocked` hold on an issue, or leave "a human's call" in a ticket: it is a question for a specialist. You ask one, apply the answer, record it, and keep working.
 
 ## 1. When to use it
 
 Use it every time you are about to do any of these:
 - post options, a "Decision for the implementer", a "human's call" or a "Why not an agent" line;
-- pick `ready-for-human`, `needs-info` or `not-ready` for any reason other than those in step 5;
+- add `blocked` or record `not-ready` for any reason other than those in step 5;
 - stop a run because a product, design, architecture, scope, risk or security question is open.
 
 Do not use it for a question that has one defensible answer in the code, the spec, an ADR or `CONTEXT.md`. Read those first and apply what they say.
@@ -77,8 +77,9 @@ A human who disagrees overturns the row in review. That is an ordinary review fi
 Only what no agent in this pipeline can do:
 - an action that needs a person's own credentials, account settings, payment, or a legal commitment;
 - merging a PR, closing an issue, or removing a label a human set;
-- information only the reporter has (`needs-info`): a repro, a version, what they expected;
+- information only the reporter has: a repro, a version, what they expected;
 - a platform limit, such as GitHub refusing to let the author approve their own PR;
+- a security and tenancy specialist that does not approve `risk-high` or `security` work for unattended implementation: it gets no Agent Brief and no claim; add `blocked` and state the verdict and its reasons in a 🤖 comment;
 - a write Claude Code refuses under `dontAsk` (protected configuration). Put the exact patch and the guardian's verdict in the report or PR, so applying it is one step for a human.
 
 Everything else is decided here.
