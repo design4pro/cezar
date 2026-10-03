@@ -317,8 +317,9 @@ Then, per managed project and in this order:
 1. **Sync.** Fast-forward the main checkout to `origin/<baseBranch>` and, when
    `docs/agents/cezar-automations.json` changed, re-apply the automations with the repo's own
    `cez-automations.sh`. It leaves the checkout alone when it is not on the base branch or is dirty,
-   and when an enabled automation polls within 60 seconds (SDLC.md § Repo automations: a poll reads
-   the working tree). A sync that cannot happen is logged and the tick goes on.
+   and it waits, up to two minutes, until no enabled automation polls within 10 seconds (SDLC.md §
+   Repo automations: a poll reads the working tree). A sync that cannot happen is logged and the
+   tick goes on.
 2. **Repair.** Only a run that is `failed`, was started unattended (`autonomous`), finished within
    the last 48 hours, is not archived, was not cancelled, and is the newest run of its workflow and
    task (a newer run has taken the work over). The ladder, per run id:

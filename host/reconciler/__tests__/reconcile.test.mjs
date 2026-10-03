@@ -35,6 +35,7 @@ import {
   retryableReceipts,
   slotsHeld,
   targetIssue,
+  waitForQuietPoll,
   warsawClock,
 } from "../reconcile.mjs";
 
@@ -503,10 +504,41 @@ describe("digest", () => {
 describe("sync guard", () => {
   const states = { enabled: { nextCheckAt: iso(30_000) }, gone: { nextCheckAt: iso(1_000) }, later: { nextCheckAt: iso(5 * 60_000) } };
 
-  it("blocks on an enabled automation polling within 60 s, on either side of now", () => {
-    expect(imminentPoll(states, new Set(["enabled", "later"]), NOW)).toBe("enabled");
-    expect(imminentPoll({ x: { nextCheckAt: iso(-45_000) } }, new Set(["x"]), NOW)).toBe("x");
-    expect(imminentPoll({ x: { nextCheckAt: iso(61_000) } }, new Set(["x"]), NOW)).toBeNull();
+  it("blocks on an enabled automation polling within 10 s, on either side of now", () => {
+    expect(imminentPoll({ x: { nextCheckAt: iso(8_000) } }, new Set(["x"]), NOW)).toBe("x");
+    expect(imminentPoll({ x: { nextCheckAt: iso(-8_000) } }, new Set(["x"]), NOW)).toBe("x");
+    expect(imminentPoll({ x: { nextCheckAt: iso(11_000) } }, new Set(["x"]), NOW)).toBeNull();
+  });
+
+  // Run b6eb30ef's tick and every later one skipped the sync: two automations poll every 60 s, so
+  // one was always within the old 60 s margin and a merged change never reached the checkout.
+  it("waits for a quiet moment instead of giving up on the first busy one", () => {
+    let now = NOW;
+    const result = waitForQuietPoll({
+      states: () => ({ x: { nextCheckAt: iso(5_000) } }),
+      enabledIds: new Set(["x"]),
+      now: () => now,
+      sleep: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result).toBeNull();
+    expect(now - NOW).toBeGreaterThan(5_000 + 10_000);
+    expect(now - NOW).toBeLessThan(2 * 60_000);
+  });
+
+  it("gives up after two minutes and names the automation", () => {
+    let now = NOW;
+    const result = waitForQuietPoll({
+      states: () => ({ x: { nextCheckAt: new Date(now + 1_000).toISOString() } }),
+      enabledIds: new Set(["x"]),
+      now: () => now,
+      sleep: (ms) => {
+        now += ms;
+      },
+    });
+    expect(result).toBe("x");
+    expect(now - NOW).toBeGreaterThanOrEqual(2 * 60_000);
   });
 
   it("ignores a state for an automation that is not enabled", () => {
