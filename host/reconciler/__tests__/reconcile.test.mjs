@@ -174,7 +174,7 @@ describe("capacity", () => {
       ),
     );
     expect(launches(actions)).toEqual(["pt:#1", "pt:#2"]);
-    expect(ofType(actions, "skip").some((a) => /no free slot \(4 in all, 2 held\)/.test(a.reason))).toBe(true);
+    expect(ofType(actions, "skip").some((a) => /no free slot \(4 in all, 2 held, 2 started this tick\)/.test(a.reason))).toBe(true);
   });
 
   it("starts nothing when the workspace is full, and says why", () => {
@@ -200,6 +200,7 @@ describe("capacity", () => {
     const actions = decide(snapshot(withRepair, { maxLaunch: 1 }));
     expect(ofType(actions, "repair")).toHaveLength(1);
     expect(launches(actions)).toEqual([]);
+    expect(ofType(actions, "skip")[0].reason).toBe("--max-launch 1 reached (1 started this tick)");
   });
 });
 

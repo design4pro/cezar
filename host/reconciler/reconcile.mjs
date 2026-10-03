@@ -353,13 +353,18 @@ export function decide(snapshot) {
     });
   }
   const free = snapshot.maxParallel - slotsHeld(everyRun, snapshot.maxMonitoring);
-  let budget = Math.min(Math.max(0, free), snapshot.maxLaunch);
-  const wait = (project, subject) => ({
-    type: "skip",
-    project,
-    subject,
-    reason: `no free slot (${snapshot.maxParallel} in all, ${slotsHeld(everyRun, snapshot.maxMonitoring)} held)`,
-  });
+  const initialBudget = Math.min(Math.max(0, free), snapshot.maxLaunch);
+  let budget = initialBudget;
+  // The budget runs out for one of two reasons, and the skip names the one that applied: slots
+  // still free means `--max-launch` stopped the tick.
+  const wait = (project, subject) => {
+    const started = initialBudget - budget;
+    const reason =
+      started < free
+        ? `--max-launch ${snapshot.maxLaunch} reached (${started} started this tick)`
+        : `no free slot (${snapshot.maxParallel} in all, ${slotsHeld(everyRun, snapshot.maxMonitoring)} held, ${started} started this tick)`;
+    return { type: "skip", project, subject, reason };
+  };
 
   for (const project of snapshot.projects.filter((candidate) => candidate.managed)) {
     const failures = project.runs.filter((run) => run.status === "failed" || run.status === "cancelled");
