@@ -46,8 +46,15 @@ const MAX_REPAIRS = 2;
 const MAX_ACTIVE_PER_PROJECT = 2;
 /** Two Claude Code processes starting in the same second race on the OAuth refresh (PR #50). */
 const START_STAGGER_MS = 20_000;
-/** An automation poll this close, either side, may be mid-read of the working tree. */
-const SYNC_MARGIN_MS = 60_000;
+/**
+ * An automation poll this close, either side, may be mid-read of the working tree. A fast-forward
+ * rewrites the files in well under a second, so the margin only needs to cover clock skew: at 60 s,
+ * two automations polling every 60 s kept every tick from syncing.
+ */
+const SYNC_MARGIN_MS = 10_000;
+/** How long a sync waits for a quiet moment between polls before it gives up for this tick. */
+const SYNC_WAIT_MS = 2 * 60_000;
+const SYNC_RECHECK_MS = 2_000;
 const DIGEST_ZONE = "Europe/Warsaw";
 const DIGEST_HOUR = 7;
 const DIGEST_TITLE = "Pipeline status";
@@ -245,6 +252,23 @@ export function imminentPoll(states, enabledIds, now, margin = SYNC_MARGIN_MS) {
     if (Number.isFinite(next) && Math.abs(next - now) <= margin) return id;
   }
   return null;
+}
+
+/**
+ * Wait, rechecking the state file, until no enabled automation polls within the margin, and give up
+ * after `SYNC_WAIT_MS`. Null when the moment is quiet, otherwise the automation still in the way.
+ */
+export function waitForQuietPoll({ states, enabledIds, now = Date.now, sleep = sleepSync }) {
+  const deadline = now() + SYNC_WAIT_MS;
+  for (;;) {
+    const poll = imminentPoll(states(), enabledIds, now());
+    if (!poll || now() >= deadline) return poll;
+    sleep(SYNC_RECHECK_MS);
+  }
+}
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 const zoneParts = new Intl.DateTimeFormat("en-CA", {
@@ -692,8 +716,9 @@ function syncProject({ id, root }, dryRun) {
         .filter((automation) => automation.enabled)
         .map((automation) => automation.id),
     );
-    const poll = imminentPoll(readJson(join(root, ".ai/cezar/automation-state.json"))?.states, enabled, Date.now());
+    const states = () => readJson(join(root, ".ai/cezar/automation-state.json"))?.states;
     if (dryRun) {
+      const poll = imminentPoll(states(), enabled, Date.now());
       const remote = git("ls-remote", "origin", `refs/heads/${base}`).split(/\s+/)[0];
       if (!remote) return say(`origin has no ${base}`);
       if (remote === head) return say("up to date");
@@ -705,7 +730,10 @@ function syncProject({ id, root }, dryRun) {
     }
     git("fetch", "origin", base);
     if (git("rev-list", "--count", `HEAD..origin/${base}`) === "0") return say("up to date");
-    if (poll) return say(`skipped, automation ${poll.slice(0, 8)} polls within ${SYNC_MARGIN_MS / 1000} s`);
+    const poll = waitForQuietPoll({ states, enabledIds: enabled });
+    if (poll) {
+      return say(`skipped, automation ${poll.slice(0, 8)} kept polling within ${SYNC_MARGIN_MS / 1000} s for ${SYNC_WAIT_MS / 60_000} min`);
+    }
 
     git("merge", "--ff-only", `origin/${base}`);
     say(`fast-forwarded ${head.slice(0, 7)} -> ${git("rev-parse", "--short=7", "HEAD")}`);
