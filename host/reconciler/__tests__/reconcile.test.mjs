@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createApi,
   decide,
   describe as describeAction,
   digestBody,
@@ -605,5 +606,46 @@ describe("describe", () => {
     expect(lines[3]).toBe('continue abcdef12 (implement-ticket) attempt 1: step "implement" failed: the agent exploded');
     expect(lines[4]).toContain("blocked + HUMAN-ONLY on #4");
     expect(lines[5]).toContain("digest only");
+  });
+});
+
+describe("createApi", () => {
+  // The cockpit closes an idle keep-alive socket after 5 s, and a tick runs `backlog-status.mjs`
+  // for longer than that between two calls: `fetch` then reuses the dead socket and throws
+  // `UND_ERR_SOCKET` before the request reaches the server.
+  const staleSocket = () => Object.assign(new TypeError("fetch failed"), { cause: { code: "UND_ERR_SOCKET" } });
+  const ok = () => new Response("[]", { status: 200 });
+
+  it("sends a request again once when the socket it reused was already closed", async () => {
+    const calls = [];
+    const fetchImpl = async (url) => {
+      calls.push(url);
+      if (calls.length === 1) throw staleSocket();
+      return ok();
+    };
+    const response = await createApi("http://cockpit", fetchImpl).get("/api/v1/p/cezar/runs");
+    expect(response).toMatchObject({ ok: true, status: 200, json: [] });
+    expect(calls).toEqual(["http://cockpit/api/v1/p/cezar/runs", "http://cockpit/api/v1/p/cezar/runs"]);
+  });
+
+  it("does not retry any other failure, and gives up after the second closed socket", async () => {
+    const refused = Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
+    let calls = 0;
+    await expect(
+      createApi("http://cockpit", async () => {
+        calls += 1;
+        throw refused;
+      }).post("/api/v1/p/x/runs", {}),
+    ).rejects.toBe(refused);
+    expect(calls).toBe(1);
+
+    calls = 0;
+    await expect(
+      createApi("http://cockpit", async () => {
+        calls += 1;
+        throw staleSocket();
+      }).get("/x"),
+    ).rejects.toThrow("fetch failed");
+    expect(calls).toBe(2);
   });
 });

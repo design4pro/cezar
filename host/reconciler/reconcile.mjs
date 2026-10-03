@@ -613,14 +613,28 @@ function saveState(state, now) {
   renameSync(tmp, STATE_FILE);
 }
 
-function createApi(base) {
-  const call = async (method, path, body) => {
-    const response = await fetch(`${base}${path}`, {
+/**
+ * The cockpit closes an idle keep-alive socket after 5 s, and a tick spends longer than that in
+ * `git` and `backlog-status.mjs` between two calls. `fetch` then reuses the closed socket and fails
+ * with `UND_ERR_SOCKET` before the request reaches the server, so that one failure is sent again,
+ * once, on a new socket. Every other failure is thrown as it was.
+ */
+export function createApi(base, fetchImpl = fetch) {
+  const send = (method, path, body) =>
+    fetchImpl(`${base}${path}`, {
       method,
       headers: body === undefined ? undefined : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
+  const call = async (method, path, body) => {
+    let response;
+    try {
+      response = await send(method, path, body);
+    } catch (error) {
+      if (error?.cause?.code !== "UND_ERR_SOCKET") throw error;
+      response = await send(method, path, body);
+    }
     const text = await response.text();
     let json = null;
     try {
