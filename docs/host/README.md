@@ -302,7 +302,8 @@ across every project the cockpit has registered, managed or not (`slotsHeld`,
 (`packages/cezar/src/workflows/run.ts`): a `running` run and a `queued` run hold a slot; a
 `waiting` run holds none (#347); a run that is `running` with `activity: monitoring` holds none up
 to `maxMonitoringSessions`; a `review` run has closed its session. A repair, a retried receipt and a
-launch each spend one unit; when it is gone the tick says "no free slot" for the rest.
+launch each spend one unit; when it is gone the tick says "no free slot" for the rest, or
+"--max-launch N reached" when slots are still free but the tick has started its `--max-launch` runs.
 
 **A usage limit stops everything.** If any run in any project is parked on a provider's usage limit
 (`isParkedOnUsageLimit`, `reconcile.mjs:87`: a `failed` run with the engine's booked `autoResumeAt`,
