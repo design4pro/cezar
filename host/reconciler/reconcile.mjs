@@ -456,15 +456,15 @@ export function decide(snapshot) {
         actions.push({ type: "repair", project: project.id, mode, run, attempt: attempts + 1 });
       }
 
-      const seenKinds = new Set();
+      // The plan may rank several candidates of a kind. One run per kind starts, and a candidate
+      // that cannot start hands its turn to the next: a target in cooldown must not hold back a
+      // ready one behind it.
+      const startedKinds = new Set();
       for (const planned of project.plan ?? []) {
         const subject = `${planned.kind} ${planned.target}`;
         const skip = (reason) => actions.push({ type: "skip", project: project.id, subject, reason });
-        // The plan holds one action per kind; if it ever held two, the first is the one it meant.
-        const repeated = seenKinds.has(planned.kind);
-        seenKinds.add(planned.kind);
-        if (repeated) {
-          skip(`a ${planned.kind} action came first`);
+        if (startedKinds.has(planned.kind)) {
+          skip(`a ${planned.kind} run started this tick`);
         } else if (owned.some((task) => mentionsTarget(task, planned.target))) {
           skip("a run already owns this target");
         } else if (
@@ -480,6 +480,7 @@ export function decide(snapshot) {
           budget -= 1;
           active += 1;
           owned.push(planned.task);
+          startedKinds.add(planned.kind);
           actions.push({ type: "launch", project: project.id, ...planned });
         }
       }
