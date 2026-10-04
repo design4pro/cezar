@@ -337,9 +337,11 @@ Then, per managed project and in this order:
    Launch-error receipts of the last 48 hours are retried once through
    `POST /automation-log/:id/retry`.
 3. **Launch.** The target repository answers `node .ai/scripts/backlog-status.mjs --plan` (cwd is the
-   project root) with `{"wip":{...},"actions":[{"kind","target","workflow","task"}]}`: at most one
-   action per kind, already in priority order (implement, unblock, triage, slice, write-spec).
-   The tick starts them in that order, skipping a target an active run already names (`#12` is not
+   project root) with `{"wip":{...},"actions":[{"kind","target","workflow","task"}]}`, in priority
+   order (implement, unblock, triage, slice, write-spec), best candidate of a kind first; a kind may
+   list several candidates. The tick starts at most one run per kind, and a candidate that cannot
+   start hands its turn to the next one of its kind, so a target in cooldown never holds back a
+   ready one behind it. It skips a target an active run already names (`#12` is not
    `#123`), a target whose run failed or was cancelled in the last 48 hours (so a target nobody
    can fix is not relaunched every ten minutes), a target the same workflow finished as `done` in
    the last 6 hours (the agent judged it finished, so repeating it every tick only spends runs), a

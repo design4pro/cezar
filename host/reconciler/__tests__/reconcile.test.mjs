@@ -210,7 +210,20 @@ describe("launch", () => {
     const plan = [act("triage", "#3"), act("triage", "#4"), act("implement", "#1")];
     const actions = decide(snapshot([project("pt", { plan })]));
     expect(launches(actions)).toEqual(["pt:#3", "pt:#1"]);
-    expect(ofType(actions, "skip")[0]).toMatchObject({ subject: "triage #4", reason: "a triage action came first" });
+    expect(ofType(actions, "skip")[0]).toMatchObject({ subject: "triage #4", reason: "a triage run started this tick" });
+  });
+
+  // planned.travel 2026-10-04: #516 led the plan for six hours after its run ended, and #121, ready
+  // behind it, never started because the first candidate of a kind was the only one tried.
+  it("tries the next candidate of a kind when the first one cannot start", () => {
+    const done = run({ workflow: "wf-implement", task: "Implement issue #516.", finishedAt: iso(-HOUR) });
+    const plan = [act("implement", "#516"), act("implement", "#121"), act("implement", "#200")];
+    const actions = decide(snapshot([project("pt", { runs: [done], plan })]));
+    expect(launches(actions)).toEqual(["pt:#121"]);
+    expect(ofType(actions, "skip").map((a) => a.subject)).toEqual(["implement #516", "implement #200"]);
+
+    const owner = run({ status: "running", task: "Implement issue #516." });
+    expect(launches(decide(snapshot([project("pt", { runs: [owner], plan })])))).toEqual(["pt:#121"]);
   });
 
   it("allows a project two active runs, counting what it launches itself", () => {
