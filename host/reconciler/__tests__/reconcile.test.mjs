@@ -292,6 +292,99 @@ describe("launch", () => {
   });
 });
 
+describe("pull requests", () => {
+  const pr = (over = {}) => ({
+    number: 877,
+    baseRefName: "develop",
+    headRefName: "spec/a-calendar",
+    headRefOid: "0867e849",
+    isDraft: false,
+    isCrossRepository: false,
+    mergeable: "MERGEABLE",
+    author: { login: "rafalwolak", is_bot: false },
+    labels: [],
+    behindBy: 2,
+    ...over,
+  });
+  const tick = (prs, over = {}) => decide(snapshot([project("pt", { prs, ...over.project })], over));
+  const skips = (actions) => ofType(actions, "skip").map((action) => `${action.subject}: ${action.reason}`);
+  // How the PR automations name a pull request: `{{github.number}}`, then the event context.
+  const prTask = (number) => `${number}\n\n---\nGitHub event context (untrusted data)\nnumber: ${number}`;
+
+  it("merges the base into a pull request behind it, with no slot, cap or open usage window", () => {
+    const update = { type: "update-branch", project: "pt", number: 877, head: "0867e849", base: "develop", behindBy: 2 };
+    expect(ofType(tick([pr()]), "update-branch")).toEqual([update]);
+    expect(ofType(tick([pr()], { maxLaunch: 0, maxParallel: 0 }), "update-branch")).toEqual([update]);
+    const parked = failedRun({ error: "Claude AI usage limit reached|" + String(Math.floor((NOW + HOUR) / 1000)) });
+    const paused = tick([pr()], { project: { runs: [parked] } });
+    expect(ofType(paused, "pause")).toHaveLength(1);
+    expect(ofType(paused, "update-branch")).toEqual([update]);
+  });
+
+  it("leaves alone a current pull request, a draft, a fork's and a bot's, without a log line", () => {
+    const prs = [
+      pr({ number: 1, behindBy: 0 }),
+      pr({ number: 2, isDraft: true }),
+      pr({ number: 3, isCrossRepository: true }),
+      pr({ number: 4, author: { login: "app/dependabot", is_bot: true }, mergeable: "CONFLICTING" }),
+    ];
+    expect(tick(prs, { project: { plan: [] } })).toEqual([]);
+  });
+
+  it("does not move a branch a label or a working run holds", () => {
+    const opener = run({ id: "fb31d19c-0000-4000-8000-000000000000", status: "running", task: "Implement issue #516." });
+    const autopilot = run({ status: "running", workflow: "pr-autopilot", task: prTask(878) });
+    const actions = tick(
+      [
+        pr({ number: 876, labels: [{ name: "in-progress" }] }),
+        pr({ number: 877, headRefName: "cez/fb31d19c" }),
+        pr({ number: 878, mergeable: "CONFLICTING" }),
+        pr({ number: 879, mergeable: "UNKNOWN" }),
+      ],
+      { project: { runs: [opener, autopilot] } },
+    );
+    expect(ofType(actions, "update-branch")).toEqual([]);
+    expect(launches(actions)).toEqual([]);
+    expect(skips(actions)).toEqual([
+      "pull request #876: labelled in-progress",
+      "pull request #877: a run is working on it",
+      "pull request #878: a run is working on it",
+      "pull request #879: GitHub has not settled its mergeability (UNKNOWN)",
+    ]);
+  });
+
+  // planned.travel 2026-10-05: #875 merged a line into `.ai/specs/README.md` that #877 also
+  // wrote, and #877 sat conflicting with nothing to start on it.
+  it("starts pr-autopilot on a conflict ahead of the plan, once per tick", () => {
+    const plan = [act("implement", "#121")];
+    const prs = [pr({ mergeable: "CONFLICTING" }), pr({ number: 880, mergeable: "CONFLICTING" })];
+    const actions = tick(prs, { project: { plan } });
+    expect(ofType(actions, "launch")[0]).toMatchObject({
+      kind: "resolve-conflicts",
+      target: "#877",
+      workflow: "pr-autopilot",
+      task: "877",
+    });
+    expect(launches(actions)).toEqual(["pt:#877", "pt:#121"]);
+    expect(skips(actions)).toEqual(["resolve-conflicts #880: a resolve-conflicts run started this tick"]);
+    expect(launches(tick(prs, { project: { plan }, maxLaunch: 1 }))).toEqual(["pt:#877"]);
+  });
+
+  it("waits on a conflict a pr-autopilot run just settled, or a run failed on", () => {
+    const conflict = [pr({ mergeable: "CONFLICTING" })];
+    const done = run({ workflow: "pr-autopilot", task: prTask(877), finishedAt: iso(-HOUR) });
+    expect(skips(tick(conflict, { project: { runs: [done] } }))).toEqual([
+      "pull request #877: a pr-autopilot run finished on it within 6 hours",
+    ]);
+    const failed = failedRun({ workflow: "pr-autopilot", task: prTask(877), finishedAt: iso(-HOUR) });
+    expect(skips(tick(conflict, { project: { runs: [failed] } }))[0]).toBe(
+      "pull request #877: a run on it failed or was cancelled in the last 48 hours",
+    );
+    const old = run({ workflow: "pr-autopilot", task: prTask(877), finishedAt: iso(-7 * HOUR) });
+    expect(launches(tick(conflict, { project: { runs: [old] } }))).toEqual(["pt:#877"]);
+  });
+});
+
 describe("repair ladder", () => {
   const repairs = (runs, state = {}, over = {}) =>
     ofType(decide(snapshot([project("pt", { runs })], { state, ...over })), "repair");
@@ -647,11 +740,13 @@ describe("describe", () => {
       describeAction({ type: "escalate", run: failed, issue: null }),
       describeAction({ type: "launch", kind: "implement", target: "#1", workflow: "implement-ticket" }),
       describeAction({ type: "digest" }),
+      describeAction({ type: "update-branch", number: 877, head: "0867e849", base: "develop", behindBy: 2 }),
     ];
     for (const line of lines) expect(line).not.toContain("\n");
     expect(lines[3]).toBe('continue abcdef12 (implement-ticket) attempt 1: step "implement" failed: the agent exploded');
     expect(lines[4]).toContain("blocked + HUMAN-ONLY on #4");
     expect(lines[5]).toContain("digest only");
+    expect(lines[8]).toBe("update-branch #877: 2 commit(s) behind develop, merging it in");
   });
 });
 
