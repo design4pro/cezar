@@ -344,7 +344,9 @@ Then, per managed project and in this order:
    - merges the base into one that is behind and mergeable, through GitHub's `update-branch` with
      the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
      no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. CI
-     runs again on the new head;
+     runs again on the new head, so a pull request that waits for a person (the same rule as
+     `merge` below) is left behind until the person answers: two CI runners cannot rerun every
+     open pull request after every merge;
    - starts a `pr-autopilot` run, whose task is the bare number the way the automations pass it,
      ahead of the plan and in this order: `merge` for one that is current, green and waits on
      nobody (no `needs-qa` without `qa-approved`, no `risk-high`, no `security`: the digest's own

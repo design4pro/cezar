@@ -397,7 +397,9 @@ function worksOnPr(run, pr) {
 /** What a pull request needs, or null when nothing: the base merged in, or one of `PR_KINDS`. */
 function prNeed(pr) {
   if (pr.mergeable === "CONFLICTING") return "resolve-conflicts";
-  if (pr.behindBy > 0) return "update";
+  // Every update reruns the whole CI on a small runner pool, so a pull request that waits for a
+  // person is brought up to date once the person has answered, not after every merge.
+  if (pr.behindBy > 0) return waitingReasons(pr).length === 0 ? "update" : null;
   const checks = checksState(pr.statusCheckRollup);
   if (checks === "failed") return "fix-checks";
   if (checks === "passed" && waitingReasons(pr).length === 0) return "merge";

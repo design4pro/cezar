@@ -322,6 +322,19 @@ describe("pull requests", () => {
     expect(ofType(paused, "update-branch")).toEqual([update]);
   });
 
+  // design4pro 2026-10-05: two CI runners, and every merge into develop queued a full CI run on
+  // each open pull request, including the risk-high ones nobody may merge yet.
+  it("updates a pull request that waits for a person only once the person has answered", () => {
+    const waiting = [
+      pr({ number: 798, labels: [{ name: "risk-high" }] }),
+      pr({ number: 880, labels: [{ name: "security" }] }),
+      pr({ number: 779, labels: [{ name: "needs-qa" }] }),
+    ];
+    expect(tick(waiting, { project: { plan: [] } })).toEqual([]);
+    const answered = pr({ number: 779, labels: [{ name: "needs-qa" }, { name: "qa-approved" }] });
+    expect(ofType(tick([answered]), "update-branch").map((a) => a.number)).toEqual([779]);
+  });
+
   it("leaves alone a current pull request, a draft, a fork's and a bot's, without a log line", () => {
     const prs = [
       pr({ number: 1, behindBy: 0 }),
