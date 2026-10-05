@@ -12,6 +12,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  checksState,
   createApi,
   decide,
   describe as describeAction,
@@ -370,6 +371,40 @@ describe("pull requests", () => {
     expect(launches(tick(prs, { project: { plan }, maxLaunch: 1 }))).toEqual(["pt:#877"]);
   });
 
+  const rollup = (conclusion) => [
+    { __typename: "CheckRun", name: "unit", workflowName: "CI", status: "COMPLETED", conclusion: "SUCCESS" },
+    { __typename: "CheckRun", name: "e2e", workflowName: "CI", status: "COMPLETED", conclusion },
+  ];
+
+  // planned.travel 2026-10-05: #779 failed its own e2e journeys, got `qa-approved` by hand, and no
+  // event started anything on it: the automations fire on `opened` and `reviewed` only.
+  it("starts pr-autopilot on a red pull request, and on a green one that waits on nobody", () => {
+    const red = pr({ number: 779, behindBy: 0, statusCheckRollup: rollup("FAILURE") });
+    const green = pr({
+      number: 781,
+      behindBy: 0,
+      statusCheckRollup: rollup("SUCCESS"),
+      labels: [{ name: "needs-qa" }, { name: "qa-approved" }, { name: "risk-medium" }],
+    });
+    const actions = tick([red, green], { project: { plan: [act("implement", "#121")] } });
+    expect(ofType(actions, "launch").map((a) => `${a.kind} ${a.target} ${a.workflow} ${a.task}`)).toEqual([
+      "merge #781 pr-autopilot 781",
+      "fix-checks #779 pr-autopilot 779",
+    ]);
+  });
+
+  it("leaves a green pull request that waits for a person, one still running, and one behind to update", () => {
+    const prs = [
+      pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "risk-high" }] }),
+      pr({ number: 2, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "needs-qa" }] }),
+      pr({ number: 3, behindBy: 0, statusCheckRollup: rollup("").map((c) => ({ ...c, status: "QUEUED" })) }),
+      pr({ number: 4, behindBy: 3, statusCheckRollup: rollup("FAILURE") }),
+    ];
+    const actions = tick(prs);
+    expect(launches(actions)).toEqual([]);
+    expect(ofType(actions, "update-branch").map((a) => a.number)).toEqual([4]);
+  });
+
   it("waits on a conflict a pr-autopilot run just settled, or a run failed on", () => {
     const conflict = [pr({ mergeable: "CONFLICTING" })];
     const done = run({ workflow: "pr-autopilot", task: prTask(877), finishedAt: iso(-HOUR) });
@@ -382,6 +417,33 @@ describe("pull requests", () => {
     );
     const old = run({ workflow: "pr-autopilot", task: prTask(877), finishedAt: iso(-7 * HOUR) });
     expect(launches(tick(conflict, { project: { runs: [old] } }))).toEqual(["pt:#877"]);
+  });
+});
+
+describe("checksState", () => {
+  const check = (name, conclusion, over = {}) => ({
+    __typename: "CheckRun",
+    name,
+    workflowName: "CI",
+    status: "COMPLETED",
+    conclusion,
+    startedAt: "2026-10-05T09:00:00Z",
+    ...over,
+  });
+
+  it("reads a failure, a running check, and a skipped one as a pass", () => {
+    expect(checksState([])).toBeNull();
+    expect(checksState([check("unit", "SUCCESS"), check("e2e", "SKIPPED")])).toBe("passed");
+    expect(checksState([check("unit", "SUCCESS"), check("e2e", "FAILURE")])).toBe("failed");
+    expect(checksState([check("unit", "SUCCESS"), check("e2e", "", { status: "IN_PROGRESS" })])).toBe("pending");
+    expect(checksState([{ __typename: "StatusContext", context: "deploy", state: "ERROR" }])).toBe("failed");
+  });
+
+  it("counts a check that ran twice on one head by its latest run", () => {
+    const failed = check("e2e", "FAILURE", { startedAt: "2026-10-05T09:00:00Z" });
+    const rerun = check("e2e", "SUCCESS", { startedAt: "2026-10-05T10:00:00Z" });
+    expect(checksState([failed, rerun])).toBe("passed");
+    expect(checksState([rerun, failed])).toBe("passed");
   });
 });
 

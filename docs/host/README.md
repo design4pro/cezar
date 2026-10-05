@@ -336,19 +336,24 @@ Then, per managed project and in this order:
      is never retried: it goes to the digest only.
    Launch-error receipts of the last 48 hours are retried once through
    `POST /automation-log/:id/retry`.
-3. **Pull requests.** Another pull request merging leaves every open one behind its base, and no
-   event says so: the PR automations fire on `pull_request.opened` and `.reviewed` only. So each
-   tick reads the open pull requests into the base branch (`gh pr list`, and the compare API for
-   how far behind each is) and:
+3. **Pull requests.** Another pull request merging leaves every open one behind its base, CI turns
+   a head red or green, a person adds `qa-approved`, and no event says so: the PR automations fire
+   on `pull_request.opened` and `.reviewed` only. So each tick reads the open pull requests into
+   the base branch (`gh pr list` with each head's `statusCheckRollup`, and the compare API for how
+   far behind each is) and:
    - merges the base into one that is behind and mergeable, through GitHub's `update-branch` with
      the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
      no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. CI
      runs again on the new head;
-   - puts a conflicting one at the front of the plan as `resolve-conflicts`, a `pr-autopilot` run
-     whose task is the bare number, the way the automations pass it. Its first move on a conflict
-     is `om-auto-fix-pr`, which merges the base and resolves the conflict. It waits 6 hours after a
-     `pr-autopilot` run finished `done` on it (the run judged the conflict a person's), and 48
-     hours after a run on it failed or was cancelled;
+   - starts a `pr-autopilot` run, whose task is the bare number the way the automations pass it,
+     ahead of the plan and in this order: `merge` for one that is current, green and waits on
+     nobody (no `needs-qa` without `qa-approved`, no `risk-high`, no `security`: the digest's own
+     rule), `resolve-conflicts` for one that conflicts (autopilot's first move there is
+     `om-auto-fix-pr`, which merges the base and resolves it), and `fix-checks` for one that is
+     current and failed a check on its head. A check that ran twice on one head counts by its
+     latest run. It waits 6 hours after a `pr-autopilot` run finished `done` on it (the run left it
+     as it was, so it judged the rest a person's), and 48 hours after a run on it failed or was
+     cancelled;
    - leaves alone a draft, a fork's branch and a bot's pull request (Dependabot rebases its own),
      and skips, with the reason in the log, one labelled `do-not-merge`, `blocked` or
      `in-progress`, one a run is working on (a PR workflow naming it on its task's first line, or
