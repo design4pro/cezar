@@ -19,7 +19,8 @@
 //
 //   1 sync    fast-forward the main checkout to origin, re-apply automations if their file changed
 //   2 repair  continue (or relaunch) a failed unattended run twice, then hand it to a person
-//   3 launch  start what `backlog-status.mjs --plan` asks for, while a slot is free
+//   3 launch  merge the base into pull requests behind it, start `pr-autopilot` on one that
+//             conflicts, then what `backlog-status.mjs --plan` asks for, while a slot is free
 //   4 digest  once a day, replace the body of the "Pipeline status" issue
 //
 // The engine is untouched: everything it needs is already an HTTP route (owner decision
@@ -350,6 +351,49 @@ export function parseGithubRepo(remoteUrl) {
   return match ? match[1] : null;
 }
 
+/** The workflow a pull request whose base moved into a conflict gets: its first move merges the base. */
+const PR_WORKFLOW = "pr-autopilot";
+/** Labels that keep the tick off a pull request's branch: a person's stop, or a run's claim. */
+const PR_HANDS_OFF = ["do-not-merge", "blocked", "in-progress"];
+
+/**
+ * Whether a run works on a pull request: a PR workflow names it on its task's first line (the
+ * automations' `{{github.number}}`, and the tick's own launch), and the run that opened it pushes
+ * to its `cez/<run id>` branch.
+ */
+function worksOnPr(run, pr) {
+  const firstLine = (run.task ?? "").split("\n", 1)[0].trim();
+  if (run.workflow?.startsWith("pr-") && firstLine === String(pr.number)) return true;
+  const branch = /^cez\/([0-9a-f]{8})$/.exec(pr.headRefName ?? "");
+  return branch !== null && run.id.startsWith(branch[1]);
+}
+
+/**
+ * What the tick does for one open pull request into the base branch, or null when there is
+ * nothing to do or the branch is not ours to touch (a draft, a fork, a bot that rebases its own).
+ * `update` merges the base in through GitHub (no agent, no slot), `resolve` hands a conflict to
+ * `PR_WORKFLOW`, and `skip` says why neither may move the branch now.
+ */
+function refreshPr(pr, runs, now) {
+  if (pr.behindBy === 0 && pr.mergeable !== "CONFLICTING") return null;
+  if (pr.isDraft || pr.isCrossRepository || pr.author?.is_bot) return null;
+  const labels = (pr.labels ?? []).map((label) => label.name ?? label);
+  const held = PR_HANDS_OFF.find((label) => labels.includes(label));
+  if (held) return { skip: `labelled ${held}` };
+  // A push under a working run breaks the run's own next push.
+  const own = runs.filter((run) => worksOnPr(run, pr));
+  if (own.some(isOpen)) return { skip: "a run is working on it" };
+  if (pr.mergeable === "MERGEABLE") return { update: true };
+  if (pr.mergeable !== "CONFLICTING") return { skip: `GitHub has not settled its mergeability (${pr.mergeable})` };
+  if (own.some((run) => run.status !== "done" && finishedWithin(run, now, REPAIR_WINDOW_MS))) {
+    return { skip: "a run on it failed or was cancelled in the last 48 hours" };
+  }
+  if (own.some((run) => run.status === "done" && run.workflow === PR_WORKFLOW && finishedWithin(run, now, DONE_COOLDOWN_MS))) {
+    return { skip: `a ${PR_WORKFLOW} run finished on it within ${DONE_COOLDOWN_MS / HOUR_MS} hours` };
+  }
+  return { resolve: true };
+}
+
 /**
  * Everything one tick decides, as an ordered list of actions. The snapshot is
  *
@@ -358,12 +402,14 @@ export function parseGithubRepo(remoteUrl) {
  *   maxLaunch    runs this tick may start at most (Infinity when unset)
  *   state        the normalized state file
  *   projects[]   every registered project, managed ones first and in priority order:
- *                { id, managed, runs, plan (actions, or null when unavailable), receipts }
+ *                { id, managed, runs, plan (actions, or null when unavailable), receipts,
+ *                  prs (open pull requests into the base with `behindBy`, or null when unread) }
  *
  * Capacity is the workspace's, not a project's: the cap protects the host, and one account's
  * limit closes every project at once, so a run parked on a usage limit anywhere pauses every
  * repair and launch. Each run the tick starts (repair, receipt retry, launch) spends one unit of
- * capacity and one of `maxLaunch`.
+ * capacity and one of `maxLaunch`. A branch update starts no run, so it spends neither and a
+ * usage limit does not stop it.
  */
 export function decide(snapshot) {
   const { now, state } = snapshot;
@@ -408,6 +454,22 @@ export function decide(snapshot) {
     // Only runs that hold a slot: a monitoring PR autopilot or a person's waiting chat must not
     // stop the project's backlog.
     let active = slotsHeld(project.runs, Infinity);
+
+    // A pull request falls behind every time another one merges, and no event says so: the base
+    // is merged in here, and a conflict goes to the plan's front as the first thing to start.
+    const resolves = [];
+    for (const pr of project.prs ?? []) {
+      const verdict = refreshPr(pr, project.runs, now);
+      if (verdict?.skip) {
+        actions.push({ type: "skip", project: project.id, subject: `pull request #${pr.number}`, reason: verdict.skip });
+      } else if (verdict?.update) {
+        const { number, headRefOid: head, baseRefName: base, behindBy } = pr;
+        actions.push({ type: "update-branch", project: project.id, number, head, base, behindBy });
+      } else if (verdict?.resolve) {
+        // The task is the bare number, the way the PR automations pass `{{github.number}}`.
+        resolves.push({ kind: "resolve-conflicts", target: `#${pr.number}`, workflow: PR_WORKFLOW, task: String(pr.number) });
+      }
+    }
 
     if (!parked) {
       for (const receipt of retryableReceipts(project.receipts, now, state)) {
@@ -460,7 +522,7 @@ export function decide(snapshot) {
       // that cannot start hands its turn to the next: a target in cooldown must not hold back a
       // ready one behind it.
       const startedKinds = new Set();
-      for (const planned of project.plan ?? []) {
+      for (const planned of [...resolves, ...(project.plan ?? [])]) {
         const subject = `${planned.kind} ${planned.target}`;
         const skip = (reason) => actions.push({ type: "skip", project: project.id, subject, reason });
         if (startedKinds.has(planned.kind)) {
@@ -565,6 +627,8 @@ export function describe(action) {
         : `escalate ${action.run.id.slice(0, 8)} (${action.run.workflow}): blocked + HUMAN-ONLY on #${action.issue}`;
     case "launch":
       return `launch ${action.kind} ${action.target} -> ${action.workflow}`;
+    case "update-branch":
+      return `update-branch #${action.number}: ${action.behindBy} commit(s) behind ${action.base}, merging it in`;
     case "digest":
       return `digest: due (after ${String(DIGEST_HOUR).padStart(2, "0")}:00 ${DIGEST_ZONE})`;
     default:
@@ -771,6 +835,34 @@ function readPlan({ id, root }) {
   }
 }
 
+const PR_FIELDS = "number,baseRefName,headRefName,headRefOid,isDraft,isCrossRepository,mergeable,author,labels";
+
+/** The open pull requests into the base branch, each with `behindBy`; null with the reason logged. */
+function readPrs({ id, root }) {
+  try {
+    const base = readJson(join(root, ".ai/agentic.config.json"))?.baseBranch;
+    if (!base) throw new Error("no baseBranch in .ai/agentic.config.json");
+    const repo = repoOf(root);
+    const prs = JSON.parse(
+      run("gh", ["pr", "list", "--base", base, "--state", "open", "--limit", "100", "--json", PR_FIELDS], { cwd: root }),
+    );
+    return prs.map((pr) => ({
+      ...pr,
+      behindBy: Number(ghApi(root, ["-X", "GET", `repos/${repo}/compare/${base}...${pr.headRefOid}`, "-q", ".behind_by"])),
+    }));
+  } catch (error) {
+    log(id, `pull requests: unreadable, none updated (${failure(error)})`);
+    return null;
+  }
+}
+
+/** GitHub merges the base in; `expected_head_sha` refuses when someone pushed since the read. */
+function updateBranch(action, { root }) {
+  ghApi(root, ["-X", "PUT", `repos/${repoOf(root)}/pulls/${action.number}/update-branch`], {
+    expected_head_sha: action.head,
+  });
+}
+
 function readReceipts(root) {
   try {
     return latestReceipts(readFileSync(join(root, ".ai/cezar/automation-receipts.ndjson"), "utf8"));
@@ -908,6 +1000,7 @@ export async function main(argv) {
       runs: await fetchRuns(api, id),
       plan: readPlan({ id, root }),
       receipts: readReceipts(root),
+      prs: readPrs({ id, root }),
     });
   }
   for (const id of reachable) {
@@ -937,6 +1030,7 @@ export async function main(argv) {
     try {
       if (action.type === "digest") await publishDigest(byId.get(action.project), context);
       else if (action.type === "escalate") await escalate(action, byId.get(action.project), context);
+      else if (action.type === "update-branch") updateBranch(action, byId.get(action.project));
       else {
         const pause = START_STAGGER_MS - (Date.now() - lastStart);
         if (lastStart && pause > 0) await sleep(pause);

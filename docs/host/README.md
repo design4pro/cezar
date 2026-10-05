@@ -336,7 +336,25 @@ Then, per managed project and in this order:
      is never retried: it goes to the digest only.
    Launch-error receipts of the last 48 hours are retried once through
    `POST /automation-log/:id/retry`.
-3. **Launch.** The target repository answers `node .ai/scripts/backlog-status.mjs --plan` (cwd is the
+3. **Pull requests.** Another pull request merging leaves every open one behind its base, and no
+   event says so: the PR automations fire on `pull_request.opened` and `.reviewed` only. So each
+   tick reads the open pull requests into the base branch (`gh pr list`, and the compare API for
+   how far behind each is) and:
+   - merges the base into one that is behind and mergeable, through GitHub's `update-branch` with
+     the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
+     no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. CI
+     runs again on the new head;
+   - puts a conflicting one at the front of the plan as `resolve-conflicts`, a `pr-autopilot` run
+     whose task is the bare number, the way the automations pass it. Its first move on a conflict
+     is `om-auto-fix-pr`, which merges the base and resolves the conflict. It waits 6 hours after a
+     `pr-autopilot` run finished `done` on it (the run judged the conflict a person's), and 48
+     hours after a run on it failed or was cancelled;
+   - leaves alone a draft, a fork's branch and a bot's pull request (Dependabot rebases its own),
+     and skips, with the reason in the log, one labelled `do-not-merge`, `blocked` or
+     `in-progress`, one a run is working on (a PR workflow naming it on its task's first line, or
+     the run whose `cez/<run id>` branch it is: a push under a working run breaks the run's next
+     push), and one whose mergeability GitHub has not computed yet.
+4. **Launch.** The target repository answers `node .ai/scripts/backlog-status.mjs --plan` (cwd is the
    project root) with `{"wip":{...},"actions":[{"kind","target","workflow","task"}]}`, in priority
    order (implement, unblock, triage, slice, write-spec), best candidate of a kind first; a kind may
    list several candidates. The tick starts at most one run per kind, and a candidate that cannot
@@ -349,7 +367,7 @@ Then, per managed project and in this order:
    anything past the capacity or `--max-launch`. Starts are 20 seconds apart: two Claude Code
    processes launched in the same second race on the OAuth refresh (PR #50). A repo whose script
    fails or does not know `--plan` launches nothing, and the tick says so.
-4. **Digest.** At most once per Warsaw day, on the first tick at or after 07:00 Europe/Warsaw (the
+5. **Digest.** At most once per Warsaw day, on the first tick at or after 07:00 Europe/Warsaw (the
    hour and the date come from `Intl`, so both clock changes are right whatever zone the host runs
    in), the body of the open issue titled exactly `Pipeline status` is replaced: the backlog by
    state, what waits for a person (held issues, pull requests needing QA or a risk decision), the
@@ -366,7 +384,7 @@ it costs nothing worse than a failed run getting its two repairs again and one e
 
 ### What it never does
 
-It never merges a PR, never closes an issue, never edits an issue other than the escalation's label
+It never merges a PR (its one write to a pull request is the base merged into its branch), never closes an issue, never edits an issue other than the escalation's label
 and comment and the digest, and never touches `packages/`. A repository the cockpit has registered
 but the tick was not told to manage still counts toward capacity and the usage-limit pause, and is
 otherwise left alone.
