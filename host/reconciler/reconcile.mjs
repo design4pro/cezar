@@ -20,7 +20,8 @@
 //   1 sync    fast-forward the main checkout to origin, re-apply automations if their file changed
 //   2 repair  continue (or relaunch) a failed unattended run twice, then hand it to a person
 //   3 launch  merge the base into pull requests behind it, start `pr-autopilot` on one that
-//             conflicts, then what `backlog-status.mjs --plan` asks for, while a slot is free
+//             is green and waits on nobody, conflicts or failed a check, then what
+//             `backlog-status.mjs --plan` asks for, while a slot is free
 //   4 digest  once a day, replace the body of the "Pipeline status" issue
 //
 // The engine is untouched: everything it needs is already an HTTP route (owner decision
@@ -351,10 +352,35 @@ export function parseGithubRepo(remoteUrl) {
   return match ? match[1] : null;
 }
 
-/** The workflow a pull request whose base moved into a conflict gets: its first move merges the base. */
+/** The workflow the tick starts on a pull request only an agent can move: it fixes, then merges. */
 const PR_WORKFLOW = "pr-autopilot";
 /** Labels that keep the tick off a pull request's branch: a person's stop, or a run's claim. */
 const PR_HANDS_OFF = ["do-not-merge", "blocked", "in-progress"];
+/** Which PR run starts first: finishing work beats repairing it. */
+export const PR_KINDS = ["merge", "resolve-conflicts", "fix-checks"];
+const FAILED_CHECK = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+
+/**
+ * The checks on a pull request's head, from `gh`'s `statusCheckRollup`: `failed`, `pending`,
+ * `passed`, or null with none. A check that ran twice on one head (a re-run, a second workflow
+ * run) counts by its latest start, so a re-run that passed clears the failure before it.
+ */
+export function checksState(rollup) {
+  const latest = new Map();
+  for (const check of rollup ?? []) {
+    const key = `${check.workflowName ?? ""}/${check.name ?? check.context}`;
+    const seen = latest.get(key);
+    if (!seen || (check.startedAt ?? "") >= (seen.startedAt ?? "")) latest.set(key, check);
+  }
+  const checks = [...latest.values()];
+  if (checks.length === 0) return null;
+  // A check run has a status and a conclusion, a commit status only a state.
+  if (checks.some((check) => FAILED_CHECK.has(check.conclusion || check.state))) return "failed";
+  if (checks.some((check) => (check.status ?? "COMPLETED") !== "COMPLETED" || ["PENDING", "EXPECTED"].includes(check.state))) {
+    return "pending";
+  }
+  return "passed";
+}
 
 /**
  * Whether a run works on a pull request: a PR workflow names it on its task's first line (the
@@ -368,30 +394,44 @@ function worksOnPr(run, pr) {
   return branch !== null && run.id.startsWith(branch[1]);
 }
 
+/** What a pull request needs, or null when nothing: the base merged in, or one of `PR_KINDS`. */
+function prNeed(pr) {
+  if (pr.mergeable === "CONFLICTING") return "resolve-conflicts";
+  if (pr.behindBy > 0) return "update";
+  const checks = checksState(pr.statusCheckRollup);
+  if (checks === "failed") return "fix-checks";
+  if (checks === "passed" && waitingReasons(pr).length === 0) return "merge";
+  return null;
+}
+
 /**
  * What the tick does for one open pull request into the base branch, or null when there is
  * nothing to do or the branch is not ours to touch (a draft, a fork, a bot that rebases its own).
- * `update` merges the base in through GitHub (no agent, no slot), `resolve` hands a conflict to
- * `PR_WORKFLOW`, and `skip` says why neither may move the branch now.
+ * `update` merges the base in through GitHub (no agent, no slot), `launch` names the `PR_KINDS`
+ * run for `PR_WORKFLOW`, and `skip` says why neither may move the branch now.
  */
 function refreshPr(pr, runs, now) {
-  if (pr.behindBy === 0 && pr.mergeable !== "CONFLICTING") return null;
   if (pr.isDraft || pr.isCrossRepository || pr.author?.is_bot) return null;
+  const need = prNeed(pr);
+  if (need === null) return null;
   const labels = (pr.labels ?? []).map((label) => label.name ?? label);
   const held = PR_HANDS_OFF.find((label) => labels.includes(label));
   if (held) return { skip: `labelled ${held}` };
   // A push under a working run breaks the run's own next push.
   const own = runs.filter((run) => worksOnPr(run, pr));
   if (own.some(isOpen)) return { skip: "a run is working on it" };
-  if (pr.mergeable === "MERGEABLE") return { update: true };
-  if (pr.mergeable !== "CONFLICTING") return { skip: `GitHub has not settled its mergeability (${pr.mergeable})` };
+  if (need === "update") {
+    if (pr.mergeable === "MERGEABLE") return { update: true };
+    return { skip: `GitHub has not settled its mergeability (${pr.mergeable})` };
+  }
   if (own.some((run) => run.status !== "done" && finishedWithin(run, now, REPAIR_WINDOW_MS))) {
     return { skip: "a run on it failed or was cancelled in the last 48 hours" };
   }
+  // A run that ended `done` and left the pull request as it was judged it a person's.
   if (own.some((run) => run.status === "done" && run.workflow === PR_WORKFLOW && finishedWithin(run, now, DONE_COOLDOWN_MS))) {
     return { skip: `a ${PR_WORKFLOW} run finished on it within ${DONE_COOLDOWN_MS / HOUR_MS} hours` };
   }
-  return { resolve: true };
+  return { launch: need };
 }
 
 /**
@@ -455,9 +495,10 @@ export function decide(snapshot) {
     // stop the project's backlog.
     let active = slotsHeld(project.runs, Infinity);
 
-    // A pull request falls behind every time another one merges, and no event says so: the base
-    // is merged in here, and a conflict goes to the plan's front as the first thing to start.
-    const resolves = [];
+    // A pull request falls behind every time another one merges, turns red or green on its own,
+    // and no event says so: the base is merged in here, and a run that fixes or merges goes to
+    // the plan's front, so finishing work starts before new work.
+    const prRuns = [];
     for (const pr of project.prs ?? []) {
       const verdict = refreshPr(pr, project.runs, now);
       if (verdict?.skip) {
@@ -465,11 +506,12 @@ export function decide(snapshot) {
       } else if (verdict?.update) {
         const { number, headRefOid: head, baseRefName: base, behindBy } = pr;
         actions.push({ type: "update-branch", project: project.id, number, head, base, behindBy });
-      } else if (verdict?.resolve) {
+      } else if (verdict?.launch) {
         // The task is the bare number, the way the PR automations pass `{{github.number}}`.
-        resolves.push({ kind: "resolve-conflicts", target: `#${pr.number}`, workflow: PR_WORKFLOW, task: String(pr.number) });
+        prRuns.push({ kind: verdict.launch, target: `#${pr.number}`, workflow: PR_WORKFLOW, task: String(pr.number) });
       }
     }
+    prRuns.sort((a, b) => PR_KINDS.indexOf(a.kind) - PR_KINDS.indexOf(b.kind));
 
     if (!parked) {
       for (const receipt of retryableReceipts(project.receipts, now, state)) {
@@ -522,7 +564,7 @@ export function decide(snapshot) {
       // that cannot start hands its turn to the next: a target in cooldown must not hold back a
       // ready one behind it.
       const startedKinds = new Set();
-      for (const planned of [...resolves, ...(project.plan ?? [])]) {
+      for (const planned of [...prRuns, ...(project.plan ?? [])]) {
         const subject = `${planned.kind} ${planned.target}`;
         const skip = (reason) => actions.push({ type: "skip", project: project.id, subject, reason });
         if (startedKinds.has(planned.kind)) {
@@ -835,7 +877,8 @@ function readPlan({ id, root }) {
   }
 }
 
-const PR_FIELDS = "number,baseRefName,headRefName,headRefOid,isDraft,isCrossRepository,mergeable,author,labels";
+const PR_FIELDS =
+  "number,baseRefName,headRefName,headRefOid,isDraft,isCrossRepository,mergeable,author,labels,statusCheckRollup";
 
 /** The open pull requests into the base branch, each with `behindBy`; null with the reason logged. */
 function readPrs({ id, root }) {
