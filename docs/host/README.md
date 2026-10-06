@@ -345,12 +345,12 @@ Then, per managed project and in this order:
      the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
      no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. CI
      runs again on the new head, so a pull request that waits for a person (the same rule as
-     `merge` below) is left behind until the person answers: two CI runners cannot rerun every
-     open pull request after every merge;
+     `merge` below: only `needs-qa` without `qa-approved`) is left behind until the person
+     answers: two CI runners cannot rerun every open pull request after every merge;
    - starts a `pr-autopilot` run, whose task is the bare number the way the automations pass it,
      ahead of the plan and in this order: `merge` for one that is current, green and waits on
-     nobody (no `needs-qa` without `qa-approved`, no `risk-high`, no `security`: the digest's own
-     rule), `resolve-conflicts` for one that conflicts (autopilot's first move there is
+     nobody (no `needs-qa` without `qa-approved`: the digest's own rule; `risk-high` and
+     `security` do not hold it, owner decision 2026-10-06), `resolve-conflicts` for one that conflicts (autopilot's first move there is
      `om-auto-fix-pr`, which merges the base and resolves it), and `fix-checks` for one that is
      current and failed a check on its head. A check that ran twice on one head counts by its
      latest run. It waits 6 hours after a `pr-autopilot` run finished `done` on it (the run left it

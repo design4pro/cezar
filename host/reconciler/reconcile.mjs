@@ -599,13 +599,15 @@ export function decide(snapshot) {
 
 // ---- the digest ----------------------------------------------------------------------------
 
-/** Why an open pull request waits for a person: QA nobody approved, or a risk a skill may not take. */
+/**
+ * Why an open pull request waits for a person: QA nobody approved. `risk-high` and `security` do
+ * not hold it (owner decision 2026-10-06): it is brought up to date and merged like any other
+ * once its checks pass, so no pull request is left behind the base for good.
+ */
 export function waitingReasons(pr) {
   const labels = new Set((pr.labels ?? []).map((label) => label.name ?? label));
   const reasons = [];
   if (labels.has("needs-qa") && !labels.has("qa-approved")) reasons.push("needs-qa");
-  if (labels.has("risk-high")) reasons.push("risk-high");
-  if (labels.has("security")) reasons.push("security");
   return reasons;
 }
 
