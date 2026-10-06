@@ -322,22 +322,15 @@ describe("pull requests", () => {
     expect(ofType(paused, "update-branch")).toEqual([update]);
   });
 
-  // design4pro 2026-10-05: two CI runners, and every merge into develop queued a full CI run on
-  // each open pull request, including the ones QA has not signed off yet. design4pro 2026-10-06:
-  // #798 (risk-high) and #880 (security) sat behind develop for good, so only QA still waits.
-  it("updates a pull request that waits for QA only once QA has answered", () => {
-    const waiting = pr({ number: 779, labels: [{ name: "needs-qa" }] });
-    expect(tick([waiting], { project: { plan: [] } })).toEqual([]);
-    const answered = pr({ number: 779, labels: [{ name: "needs-qa" }, { name: "qa-approved" }] });
-    expect(ofType(tick([answered]), "update-branch").map((a) => a.number)).toEqual([779]);
-  });
-
-  it("updates a risk-high or security pull request like any other", () => {
-    const risky = [
+  // design4pro 2026-10-06: #798 (risk-high) and #880 (security) sat behind develop for good. The
+  // owner took every label off a person's desk: QA and risk are judged by agents in pr-autopilot.
+  it("updates a pull request behind its base whatever its QA or risk labels", () => {
+    const prs = [
+      pr({ number: 779, labels: [{ name: "needs-qa" }] }),
       pr({ number: 798, labels: [{ name: "risk-high" }] }),
       pr({ number: 880, labels: [{ name: "security" }] }),
     ];
-    expect(ofType(tick(risky), "update-branch").map((a) => a.number)).toEqual([798, 880]);
+    expect(ofType(tick(prs), "update-branch").map((a) => a.number)).toEqual([779, 798, 880]);
   });
 
   it("leaves alone a current pull request, a draft, a fork's and a bot's, without a log line", () => {
@@ -411,15 +404,21 @@ describe("pull requests", () => {
     ]);
   });
 
-  it("merges a green risk-high pull request, and leaves one waiting for QA, one still running, and one behind to update", () => {
+  it("merges a green pull request whatever its QA or risk labels", () => {
+    for (const name of ["needs-qa", "risk-high", "security"]) {
+      const green = pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name }] });
+      expect(launches(tick([green]))).toEqual(["pt:#1"]);
+    }
+  });
+
+  it("leaves a blocked green pull request, one still running, and one behind to update", () => {
     const prs = [
-      pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "risk-high" }] }),
-      pr({ number: 2, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "needs-qa" }] }),
+      pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "blocked" }] }),
       pr({ number: 3, behindBy: 0, statusCheckRollup: rollup("").map((c) => ({ ...c, status: "QUEUED" })) }),
       pr({ number: 4, behindBy: 3, statusCheckRollup: rollup("FAILURE") }),
     ];
     const actions = tick(prs);
-    expect(launches(actions)).toEqual(["pt:#1"]);
+    expect(launches(actions)).toEqual([]);
     expect(ofType(actions, "update-branch").map((a) => a.number)).toEqual([4]);
   });
 
@@ -662,7 +661,7 @@ describe("digest", () => {
         { number: 5, title: "Ready", url: "https://x/5", state: "READY" },
       ],
       prs: [
-        { number: 10, title: "needs a person", url: "https://x/10", labels: [{ name: "needs-qa" }] },
+        { number: 10, title: "needs a person", url: "https://x/10", labels: [{ name: "blocked" }, { name: "needs-qa" }] },
         { number: 11, title: "approved", url: "https://x/11", labels: [{ name: "needs-qa" }, { name: "qa-approved" }] },
         { number: 12, title: "plain", url: "https://x/12", labels: [] },
         { number: 13, title: "sensitive", url: "https://x/13", labels: [{ name: "security" }, { name: "risk-high" }] },
@@ -673,7 +672,7 @@ describe("digest", () => {
     expect(body).toContain("| BLOCKED | 2 |");
     expect(body).toContain("| READY | 1 |");
     expect(body).toContain("[#3](https://x/3) A hold");
-    expect(body).toContain("[#10](https://x/10) needs a person: needs-qa");
+    expect(body).toContain("[#10](https://x/10) needs a person: blocked");
     expect(body).not.toContain("sensitive");
     expect(body).not.toContain("approved");
     expect(body).not.toContain("plain");

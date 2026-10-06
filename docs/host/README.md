@@ -337,20 +337,20 @@ Then, per managed project and in this order:
    Launch-error receipts of the last 48 hours are retried once through
    `POST /automation-log/:id/retry`.
 3. **Pull requests.** Another pull request merging leaves every open one behind its base, CI turns
-   a head red or green, a person adds `qa-approved`, and no event says so: the PR automations fire
+   a head red or green, and no event says so: the PR automations fire
    on `pull_request.opened` and `.reviewed` only. So each tick reads the open pull requests into
    the base branch (`gh pr list` with each head's `statusCheckRollup`, and the compare API for how
    far behind each is) and:
    - merges the base into one that is behind and mergeable, through GitHub's `update-branch` with
      the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
-     no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. CI
-     runs again on the new head, so a pull request that waits for a person (the same rule as
-     `merge` below: only `needs-qa` without `qa-approved`) is left behind until the person
-     answers: two CI runners cannot rerun every open pull request after every merge;
+     no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. QA
+     and risk labels do not hold it (owner decision 2026-10-06): every open pull request is
+     processed until it merges;
    - starts a `pr-autopilot` run, whose task is the bare number the way the automations pass it,
-     ahead of the plan and in this order: `merge` for one that is current, green and waits on
-     nobody (no `needs-qa` without `qa-approved`: the digest's own rule; `risk-high` and
-     `security` do not hold it, owner decision 2026-10-06), `resolve-conflicts` for one that conflicts (autopilot's first move there is
+     ahead of the plan and in this order: `merge` for one that is current and green, whatever its
+     QA or risk labels (`om-pr-autopilot` runs the agents' QA and review before it merges, and
+     after three rounds they could not close it labels the pull request `blocked`),
+     `resolve-conflicts` for one that conflicts (autopilot's first move there is
      `om-auto-fix-pr`, which merges the base and resolves it), and `fix-checks` for one that is
      current and failed a check on its head. A check that ran twice on one head counts by its
      latest run. It waits 6 hours after a `pr-autopilot` run finished `done` on it (the run left it
@@ -377,7 +377,7 @@ Then, per managed project and in this order:
 5. **Digest.** At most once per Warsaw day, on the first tick at or after 07:00 Europe/Warsaw (the
    hour and the date come from `Intl`, so both clock changes are right whatever zone the host runs
    in), the body of the open issue titled exactly `Pipeline status` is replaced: the backlog by
-   state, what waits for a person (held issues, pull requests needing QA or a risk decision), the
+   state, what waits for a person (held issues, pull requests labelled `blocked`), the
    unattended runs of the last 24 hours that failed, were escalated or were not retryable, and
    what finished. The issue is created with `do-not-close` when it is missing. It is one issue,
    edited in place, so it never grows a comment thread.
