@@ -284,7 +284,7 @@ Under `flock`, so a slow tick never overlaps the next. The cron needs no `CRON_T
 Warsaw-hour guard like the housekeeping lines: the digest does its own Europe/Warsaw arithmetic.
 
 ```cron
-*/10 * * * * mkdir -p $HOME/.cache/cez && flock -n $HOME/.cache/cez/reconcile.lock node /home/ubuntu/dev/cezar/host/reconciler/reconcile.mjs --project planned-travel=/home/ubuntu/dev/planned.travel --project money-tracker-online=/home/ubuntu/dev/money-tracker.online >> $HOME/.cache/cez/reconcile.log 2>&1
+*/10 * * * * mkdir -p $HOME/.cache/cez && flock -n $HOME/.cache/cez/reconcile.lock node /home/ubuntu/dev/cezar/host/reconciler/reconcile.mjs --project planned-travel=/home/ubuntu/dev/planned.travel --project money-tracker-online=/home/ubuntu/dev/money-tracker.online --project smakopas-pl=/home/ubuntu/dev/smakopas.pl >> $HOME/.cache/cez/reconcile.log 2>&1
 ```
 
 Run it once with `--dry-run` first and read what it says. **To stop it, remove the cron line.** There
