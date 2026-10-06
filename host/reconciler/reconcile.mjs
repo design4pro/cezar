@@ -397,12 +397,12 @@ function worksOnPr(run, pr) {
 /** What a pull request needs, or null when nothing: the base merged in, or one of `PR_KINDS`. */
 function prNeed(pr) {
   if (pr.mergeable === "CONFLICTING") return "resolve-conflicts";
-  // Every update reruns the whole CI on a small runner pool, so a pull request that waits for a
-  // person is brought up to date once the person has answered, not after every merge.
-  if (pr.behindBy > 0) return waitingReasons(pr).length === 0 ? "update" : null;
+  // QA and risk labels hold nothing (owner decision 2026-10-06): pr-autopilot judges them with
+  // agents before it merges, and `PR_HANDS_OFF` holds the rest.
+  if (pr.behindBy > 0) return "update";
   const checks = checksState(pr.statusCheckRollup);
   if (checks === "failed") return "fix-checks";
-  if (checks === "passed" && waitingReasons(pr).length === 0) return "merge";
+  if (checks === "passed") return "merge";
   return null;
 }
 
@@ -599,14 +599,14 @@ export function decide(snapshot) {
 
 // ---- the digest ----------------------------------------------------------------------------
 
-/** Why an open pull request waits for a person: QA nobody approved, or a risk a skill may not take. */
+/**
+ * Why an open pull request waits for a person: `blocked`, which pr-autopilot sets after three
+ * fix-and-QA rounds its agents could not close. QA and risk are the agents' (owner decision
+ * 2026-10-06).
+ */
 export function waitingReasons(pr) {
   const labels = new Set((pr.labels ?? []).map((label) => label.name ?? label));
-  const reasons = [];
-  if (labels.has("needs-qa") && !labels.has("qa-approved")) reasons.push("needs-qa");
-  if (labels.has("risk-high")) reasons.push("risk-high");
-  if (labels.has("security")) reasons.push("security");
-  return reasons;
+  return labels.has("blocked") ? ["blocked"] : [];
 }
 
 const bullets = (items, render, max = 30) => {

@@ -322,17 +322,15 @@ describe("pull requests", () => {
     expect(ofType(paused, "update-branch")).toEqual([update]);
   });
 
-  // design4pro 2026-10-05: two CI runners, and every merge into develop queued a full CI run on
-  // each open pull request, including the risk-high ones nobody may merge yet.
-  it("updates a pull request that waits for a person only once the person has answered", () => {
-    const waiting = [
+  // design4pro 2026-10-06: #798 (risk-high) and #880 (security) sat behind develop for good. The
+  // owner took every label off a person's desk: QA and risk are judged by agents in pr-autopilot.
+  it("updates a pull request behind its base whatever its QA or risk labels", () => {
+    const prs = [
+      pr({ number: 779, labels: [{ name: "needs-qa" }] }),
       pr({ number: 798, labels: [{ name: "risk-high" }] }),
       pr({ number: 880, labels: [{ name: "security" }] }),
-      pr({ number: 779, labels: [{ name: "needs-qa" }] }),
     ];
-    expect(tick(waiting, { project: { plan: [] } })).toEqual([]);
-    const answered = pr({ number: 779, labels: [{ name: "needs-qa" }, { name: "qa-approved" }] });
-    expect(ofType(tick([answered]), "update-branch").map((a) => a.number)).toEqual([779]);
+    expect(ofType(tick(prs), "update-branch").map((a) => a.number)).toEqual([779, 798, 880]);
   });
 
   it("leaves alone a current pull request, a draft, a fork's and a bot's, without a log line", () => {
@@ -406,10 +404,16 @@ describe("pull requests", () => {
     ]);
   });
 
-  it("leaves a green pull request that waits for a person, one still running, and one behind to update", () => {
+  it("merges a green pull request whatever its QA or risk labels", () => {
+    for (const name of ["needs-qa", "risk-high", "security"]) {
+      const green = pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name }] });
+      expect(launches(tick([green]))).toEqual(["pt:#1"]);
+    }
+  });
+
+  it("leaves a blocked green pull request, one still running, and one behind to update", () => {
     const prs = [
-      pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "risk-high" }] }),
-      pr({ number: 2, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "needs-qa" }] }),
+      pr({ number: 1, behindBy: 0, statusCheckRollup: rollup("SUCCESS"), labels: [{ name: "blocked" }] }),
       pr({ number: 3, behindBy: 0, statusCheckRollup: rollup("").map((c) => ({ ...c, status: "QUEUED" })) }),
       pr({ number: 4, behindBy: 3, statusCheckRollup: rollup("FAILURE") }),
     ];
@@ -657,10 +661,10 @@ describe("digest", () => {
         { number: 5, title: "Ready", url: "https://x/5", state: "READY" },
       ],
       prs: [
-        { number: 10, title: "needs a person", url: "https://x/10", labels: [{ name: "needs-qa" }, { name: "risk-high" }] },
+        { number: 10, title: "needs a person", url: "https://x/10", labels: [{ name: "blocked" }, { name: "needs-qa" }] },
         { number: 11, title: "approved", url: "https://x/11", labels: [{ name: "needs-qa" }, { name: "qa-approved" }] },
         { number: 12, title: "plain", url: "https://x/12", labels: [] },
-        { number: 13, title: "sensitive", url: "https://x/13", labels: [{ name: "security" }] },
+        { number: 13, title: "sensitive", url: "https://x/13", labels: [{ name: "security" }, { name: "risk-high" }] },
       ],
       runs: [failed, escalated, retrying, stale, done],
       state: { ...emptyState(), repairs: { [escalated.id]: { attempts: 2, at: iso(-HOUR), escalated: true } } },
@@ -668,8 +672,8 @@ describe("digest", () => {
     expect(body).toContain("| BLOCKED | 2 |");
     expect(body).toContain("| READY | 1 |");
     expect(body).toContain("[#3](https://x/3) A hold");
-    expect(body).toContain("[#10](https://x/10) needs a person: needs-qa, risk-high");
-    expect(body).toContain("[#13](https://x/13) sensitive: security");
+    expect(body).toContain("[#10](https://x/10) needs a person: blocked");
+    expect(body).not.toContain("sensitive");
     expect(body).not.toContain("approved");
     expect(body).not.toContain("plain");
     expect(body).toContain("### Escalated or not retryable (2)");
