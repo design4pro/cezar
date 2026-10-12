@@ -307,8 +307,17 @@ the old cadence:
 5 * * * * mkdir -p /home/ubuntu/dev/planned.travel/.ai/cezar/tmp && cd /home/ubuntu/dev/planned.travel && flock -n $HOME/.cache/cez/close-fixed-planned-travel.lock node scripts/agents/close-fixed-issues.mjs --apply --limit 50 >> .ai/cezar/tmp/close-fixed.log 2>&1
 ```
 
-Without `--apply` the script is a dry run. money-tracker.online and smakopas.pl close through the
-`om-close-fixed-issues` skill, an agent run, so they have no such line until they get the script.
+money-tracker.online and smakopas.pl carry the same script and get the same line. They have no
+release-dated `CHANGELOG.md` to anchor the default `--since last-release` (smakopas has none at all), so
+theirs pass a rolling window instead; `%` is escaped for cron:
+
+```cron
+5 * * * * mkdir -p /home/ubuntu/dev/money-tracker.online/.ai/cezar/tmp && cd /home/ubuntu/dev/money-tracker.online && flock -n $HOME/.cache/cez/close-fixed-money-tracker-online.lock node scripts/agents/close-fixed-issues.mjs --apply --since "$(date -d '7 days ago' +\%F)" --limit 100 >> .ai/cezar/tmp/close-fixed.log 2>&1
+5 * * * * mkdir -p /home/ubuntu/dev/smakopas.pl/.ai/cezar/tmp && cd /home/ubuntu/dev/smakopas.pl && flock -n $HOME/.cache/cez/close-fixed-smakopas-pl.lock node scripts/agents/close-fixed-issues.mjs --apply --since "$(date -d '7 days ago' +\%F)" --limit 100 >> .ai/cezar/tmp/close-fixed.log 2>&1
+```
+
+Without `--apply` the script is a dry run. Their `housekeeping` workflows still close through the
+`om-close-fixed-issues` skill; the markers are shared, so the two never repeat each other's comment.
 
 ### What one tick does
 
