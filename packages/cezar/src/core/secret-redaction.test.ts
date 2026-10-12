@@ -67,7 +67,7 @@ describe('redactSecrets', () => {
     ].join('\n');
     const out = redactSecrets(line, []);
     expect(out).not.toMatch(/ghp_|sk-ant|AKIA|AIza/);
-    expect(out.match(new RegExp(REDACTED.replace(/[[\]]/g, '\\$&'), 'g'))?.length).toBe(4);
+    expect(out.match(new RegExp(REDACTED.replace(/[\\[\]]/g, '\\$&'), 'g'))?.length).toBe(4);
   });
 
   it('leaves non-secret text untouched', () => {
