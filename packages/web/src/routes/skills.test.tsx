@@ -540,7 +540,7 @@ describe('the selected skill GitHub launcher', () => {
 
     const link = document.querySelector<HTMLAnchorElement>('[data-slot="skill-run-from-github"] [data-slot="bm-link"]')!
     await waitFor(() => expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('auto=0&key=sekret'))
-    expect(link.getAttribute('href')?.startsWith('javascript:')).toBe(true)
+    expect(new URL(link.getAttribute('href') ?? '').protocol).toBe('javascript:')
     fireEvent.click(document.querySelector('[data-slot="bookmarklet-auto"]')!)
     await waitFor(() => expect(decodeURIComponent(link.getAttribute('href') ?? '')).toContain('auto=1&key=sekret'))
     fireEvent.click(document.querySelector('[data-slot="skill-bookmarklet-copy"]')!)

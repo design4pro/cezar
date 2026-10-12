@@ -369,7 +369,8 @@ describe('Diff facade — an SVG is text, not a picture (#365 regression)', () =
 
       await waitFor(() => expect(document.querySelector('[data-slot="diff-markdown-preview"]')?.textContent).toContain('docs'))
       const hrefs = [...document.querySelectorAll('[data-slot="diff-markdown-preview"] [href]')].map((a) => a.getAttribute('href'))
-      expect(hrefs.some((href) => href?.startsWith('javascript:'))).toBe(false)
+      const unsafe = hrefs.filter((href) => ['javascript:', 'data:', 'vbscript:'].includes(new URL(href ?? '', 'http://localhost').protocol))
+      expect(unsafe).toEqual([])
     })
 
     it('leaves Markdown as a diff when preview is off', async () => {

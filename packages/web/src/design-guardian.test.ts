@@ -267,7 +267,7 @@ function carriesFocusRing(tag: string, source: string): boolean {
   if (!ref) return false
   // `$` is legal in an identifier and is an anchor in a pattern — unescaped, a `className={$x}`
   // would match nothing and report a select that does carry the ring.
-  const name = ref[1]!.replace(/\$/g, '\\$')
+  const name = ref[1]!.replace(/[\\$]/g, '\\$&')
   const decl = new RegExp(`\\b(?:const|let|var)\\s+${name}\\b(?:[^\\n]*\\n?){1,4}`).exec(source)
   return decl !== null && decl[0].includes(SELECT_FOCUS_MARKER)
 }
