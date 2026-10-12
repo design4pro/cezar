@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,10 +53,10 @@ export async function openInTerminal(
     if (WIN32_CMD_METACHARS_RE.test(cwd)) return false;
     const inner = `cd /d "${cwd}" && ${prefixed}`;
     // Windows Terminal first, classic cmd window as fallback.
-    if (await runDetached('cmd', ['/c', 'start', '', 'wt', '-d', cwd, 'cmd', '/K', prefixed])) {
+    if (await runCmdDetached(['/c', 'start', '', 'wt', '-d', cwd, 'cmd', '/K', prefixed])) {
       return true;
     }
-    return runDetached('cmd', ['/c', 'start', '', 'cmd', '/K', inner]);
+    return runCmdDetached(['/c', 'start', '', 'cmd', '/K', inner]);
   }
 
   // Linux/other: a temp script avoids each emulator's own quoting rules. It reaps
@@ -177,11 +177,27 @@ export function refuseSpawnUnderTest(bin: string, args: readonly string[]): void
 
 /** Spawn detached; success = no error within a short settle window. */
 function runDetached(bin: string, args: string[]): Promise<boolean> {
+  return settleLaunch(bin, args, () => spawn(bin, args, LAUNCH_SPAWN_OPTIONS));
+}
+
+/**
+ * The one launcher that goes through a shell, kept at its own `spawn` call with a literal `cmd` so
+ * the shell binary never shares a parameter with the shell-free launchers' arguments in
+ * `runDetached` (their script paths and distro names are not cmd arguments). The callers hand it
+ * a `cwd` that already passed `WIN32_CMD_METACHARS_RE`.
+ */
+function runCmdDetached(args: string[]): Promise<boolean> {
+  return settleLaunch('cmd', args, () => spawn('cmd', args, LAUNCH_SPAWN_OPTIONS));
+}
+
+const LAUNCH_SPAWN_OPTIONS = { stdio: 'ignore', detached: true } as const;
+
+function settleLaunch(bin: string, args: string[], start: () => ChildProcess): Promise<boolean> {
   return new Promise((resolve) => {
     refuseSpawnUnderTest(bin, args);
     let child;
     try {
-      child = spawn(bin, args, { stdio: 'ignore', detached: true });
+      child = start();
     } catch {
       resolve(false);
       return;
