@@ -182,7 +182,8 @@ describe('Markdown', () => {
       const hrefs = [...container.querySelectorAll('a, button')].map((el) =>
         el.getAttribute('href'),
       )
-      expect(hrefs.some((href) => href?.startsWith('javascript:'))).toBe(false)
+      const unsafe = hrefs.filter((href) => ['javascript:', 'data:', 'vbscript:'].includes(new URL(href ?? '', 'http://localhost').protocol))
+      expect(unsafe).toEqual([])
     })
 
     it('an unknown bare tag is dropped — the accepted cost of parsing user text as markdown', () => {
