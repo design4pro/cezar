@@ -290,6 +290,26 @@ Warsaw-hour guard like the housekeeping lines: the digest does its own Europe/Wa
 Run it once with `--dry-run` first and read what it says. **To stop it, remove the cron line.** There
 is nothing else to switch off: no automation, no service, no label.
 
+### Closing merged issues between housekeeping runs
+
+Pull requests merge into `develop`, which is not the default branch, so GitHub never closes the
+issues they name. Until something does, the issue stays open and reads as ready work: on
+planned.travel the reconciler re-implemented six already-merged issues in three days (about twenty
+runs, each ending in `STOP: already implemented`), because the closing step ran only inside
+`housekeeping`, three times a weekday.
+
+planned.travel's `close-fixed` step is a plain script (`scripts/agents/close-fixed-issues.mjs`), not an
+agent turn, so it costs no tokens and no `maxParallel` slot (about 25 s). It therefore has its own
+hourly line, every day of the week, and `housekeeping` keeps its review and merge-buddy passes on
+the old cadence:
+
+```cron
+5 * * * * mkdir -p /home/ubuntu/dev/planned.travel/.ai/cezar/tmp && cd /home/ubuntu/dev/planned.travel && flock -n $HOME/.cache/cez/close-fixed-planned-travel.lock node scripts/agents/close-fixed-issues.mjs --apply --limit 50 >> .ai/cezar/tmp/close-fixed.log 2>&1
+```
+
+Without `--apply` the script is a dry run. money-tracker.online and smakopas.pl close through the
+`om-close-fixed-issues` skill, an agent run, so they have no such line until they get the script.
+
 ### What one tick does
 
 A tick first asks the cockpit for its health: if it does not answer, the tick logs that and exits 0,
