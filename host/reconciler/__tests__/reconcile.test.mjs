@@ -90,7 +90,7 @@ const project = (id, over = {}) => ({ id, managed: true, runs: [], plan: [], rec
 function snapshot(projects, over = {}) {
   const state = { ...emptyState(), ...over.state };
   state.digests = { ...Object.fromEntries(projects.map((p) => [p.id, "2026-10-02"])), ...over.state?.digests };
-  return { now: NOW, maxParallel: 4, maxMonitoring: 2, maxLaunch: Infinity, projects, ...over, state };
+  return { now: NOW, maxParallel: 4, maxMonitoring: 2, maxLaunch: Infinity, maxActive: 2, projects, ...over, state };
 }
 
 const ofType = (actions, type) => actions.filter((action) => action.type === type);
@@ -236,6 +236,14 @@ describe("launch", () => {
     const actions = decide(snapshot([twoBusy]));
     expect(launches(actions)).toEqual([]);
     expect(ofType(actions, "skip")[0].reason).toMatch(/already has 2 active runs/);
+  });
+
+  it("raises a project's active runs to --max-active", () => {
+    const plan = [act("implement", "#1"), act("triage", "#2"), act("slice", "s.md")];
+    const twoBusy = project("pt", { plan, runs: [run({ status: "running" }), run({ status: "queued" })] });
+    const actions = decide(snapshot([twoBusy], { maxActive: 4 }));
+    expect(launches(actions)).toEqual(["pt:#1", "pt:#2"]);
+    expect(ofType(actions, "skip")[0].reason).toMatch(/already has 4 active runs/);
   });
 
   it("does not count a project's runs that hold no slot: waiting, review or monitoring", () => {
@@ -784,7 +792,8 @@ describe("parseArgs", () => {
     expect(options.projects).toEqual([{ id: "a", root: "/tmp/a" }, { id: "b", root: "/tmp/b" }]);
     expect(options.dryRun).toBe(true);
     expect(options.maxLaunch).toBe(3);
-    expect(parseArgs(["--project", "a=/tmp/a"])).toMatchObject({ dryRun: false, maxLaunch: Infinity });
+    expect(parseArgs(["--project", "a=/tmp/a"])).toMatchObject({ dryRun: false, maxLaunch: Infinity, maxActive: 2 });
+    expect(parseArgs(["--project", "a=/tmp/a", "--max-active", "4"]).maxActive).toBe(4);
   });
 
   it("throws on anything else, so a typo on the cron line is as red as a failure", () => {
@@ -795,6 +804,7 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--project", "a=/x", "--project", "a=/y"])).toThrow(/twice/);
     expect(() => parseArgs(["--project", "a=/x", "--max-launch", "0"])).toThrow(/positive/);
     expect(() => parseArgs(["--project", "a=/x", "--max-launch"])).toThrow(/positive/);
+    expect(() => parseArgs(["--project", "a=/x", "--max-active", "0"])).toThrow(/--max-active needs a positive/);
   });
 });
 

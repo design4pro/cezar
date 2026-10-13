@@ -3,7 +3,7 @@
 // tasks and starts the next task a managed project's backlog asks for. cron runs it every ten
 // minutes under `flock`, so ticks never overlap and nothing is held in memory between them.
 //
-//   node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N]
+//   node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N] [--max-active N]
 //
 // Env: CEZ_API (default http://127.0.0.1:4321). `gh` and `git` run as the user cron runs as; set
 // GH_CONFIG_DIR on the cron line to act as another GitHub login.
@@ -45,7 +45,8 @@ const STATE_RETENTION_MS = 14 * 24 * HOUR_MS;
 /** A target a run finished in this long ago is not started again by the same workflow. */
 const DONE_COOLDOWN_MS = 6 * HOUR_MS;
 const MAX_REPAIRS = 2;
-const MAX_ACTIVE_PER_PROJECT = 2;
+/** Runs holding a slot that one project may have; `--max-active` overrides it. */
+const DEFAULT_MAX_ACTIVE_PER_PROJECT = 2;
 /** Two Claude Code processes starting in the same second race on the OAuth refresh (PR #50). */
 const START_STAGGER_MS = 20_000;
 /**
@@ -61,10 +62,11 @@ const DIGEST_ZONE = "Europe/Warsaw";
 const DIGEST_HOUR = 7;
 const DIGEST_TITLE = "Pipeline status";
 
-const USAGE = `usage: node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N]
+const USAGE = `usage: node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N] [--max-active N]
   --project <id>=<path>  a managed project: its cockpit id and its checkout (repeat; order = priority)
   --dry-run              decide and print, change nothing (no merge, no POST, no GitHub write)
-  --max-launch N         start at most N runs this tick, repairs included`;
+  --max-launch N         start at most N runs this tick, repairs included
+  --max-active N         launch nothing new in a project that already has N active runs (default ${DEFAULT_MAX_ACTIVE_PER_PROJECT})`;
 
 // ---- pure core -----------------------------------------------------------------------------
 
@@ -442,6 +444,7 @@ function refreshPr(pr, runs, now) {
  *   now          epoch ms
  *   maxParallel  the workspace cap; maxMonitoring the monitoring exemption
  *   maxLaunch    runs this tick may start at most (Infinity when unset)
+ *   maxActive    active runs past which a project gets no new launch
  *   state        the normalized state file
  *   projects[]   every registered project, managed ones first and in priority order:
  *                { id, managed, runs, plan (actions, or null when unavailable), receipts,
@@ -577,7 +580,7 @@ export function decide(snapshot) {
           recentlyDone.some((run) => run.workflow === planned.workflow && mentionsTarget(run.task, planned.target))
         ) {
           skip(`a ${planned.workflow} run finished on this target within ${DONE_COOLDOWN_MS / HOUR_MS} hours`);
-        } else if (active >= MAX_ACTIVE_PER_PROJECT) {
+        } else if (active >= snapshot.maxActive) {
           skip(`the project already has ${active} active runs`);
         } else if (budget <= 0) {
           actions.push(wait(project.id, subject));
@@ -684,7 +687,7 @@ export function describe(action) {
 
 /** Throws on anything it does not know: a typo on a cron line must be as red as a real failure. */
 export function parseArgs(argv) {
-  const options = { projects: [], dryRun: false, maxLaunch: Infinity };
+  const options = { projects: [], dryRun: false, maxLaunch: Infinity, maxActive: DEFAULT_MAX_ACTIVE_PER_PROJECT };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--dry-run") options.dryRun = true;
@@ -697,12 +700,12 @@ export function parseArgs(argv) {
       const id = value.slice(0, split);
       if (options.projects.some((project) => project.id === id)) throw new Error(`--project ${id} given twice`);
       options.projects.push({ id, root: resolve(value.slice(split + 1)) });
-    } else if (arg === "--max-launch") {
+    } else if (arg === "--max-launch" || arg === "--max-active") {
       const value = argv[++i];
       if (!/^\d+$/.test(value ?? "") || Number(value) === 0) {
-        throw new Error(`--max-launch needs a positive whole number, got ${value ?? "nothing"}`);
+        throw new Error(`${arg} needs a positive whole number, got ${value ?? "nothing"}`);
       }
-      options.maxLaunch = Number(value);
+      options[arg === "--max-launch" ? "maxLaunch" : "maxActive"] = Number(value);
     } else throw new Error(`unknown argument ${arg}`);
   }
   if (options.projects.length === 0) throw new Error("at least one --project is required");
@@ -1060,6 +1063,7 @@ export async function main(argv) {
     maxParallel: resources.maxParallel ?? 2,
     maxMonitoring: resources.maxMonitoringSessions ?? 2,
     maxLaunch: options.maxLaunch,
+    maxActive: options.maxActive,
     state,
     projects,
   });
