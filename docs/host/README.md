@@ -265,7 +265,7 @@ ticks except a small state file, and the engine is untouched - everything it doe
 the cockpit already serves, a `git` call, or a `gh api` REST call.
 
 ```
-node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N]
+node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-run] [--max-launch N] [--max-active N]
 ```
 
 - `--project <id>=<path>`: a managed project, by its cockpit id and its checkout. Repeat it; the
@@ -274,6 +274,9 @@ node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-
   merge, no POST to the cockpit, no write to GitHub, no state file. The digest is printed, not
   published.
 - `--max-launch N`: start at most N runs this tick, repairs included.
+- `--max-active N`: launch nothing new in a project that already has N runs holding a slot
+  (default 2). It applies to every managed project, and the workspace's `maxParallel` still caps
+  them all together.
 - `CEZ_API`: the cockpit's address (default `http://127.0.0.1:4321`), the same variable the repos'
   `housekeeping.sh` reads. `GH_CONFIG_DIR` on the cron line makes `gh` act as another GitHub login.
 - An unknown argument exits 2 with the usage text, so a typo on the cron line fails loudly.
@@ -390,7 +393,8 @@ Then, per managed project and in this order:
    `#123`), a target whose run failed or was cancelled in the last 48 hours (so a target nobody
    can fix is not relaunched every ten minutes), a target the same workflow finished as `done` in
    the last 6 hours (the agent judged it finished, so repeating it every tick only spends runs), a
-   project that already has two runs holding a slot (a monitoring or waiting run holds none), and
+   project that already has two runs holding a slot, or `--max-active` of them (a monitoring or
+   waiting run holds none), and
    anything past the capacity or `--max-launch`. Starts are 20 seconds apart: two Claude Code
    processes launched in the same second race on the OAuth refresh (PR #50). A repo whose script
    fails or does not know `--plan` launches nothing, and the tick says so.
