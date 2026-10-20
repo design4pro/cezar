@@ -8,6 +8,8 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  createProject,
+  getGithubOwners,
   connectProvider,
   continueRun,
   continueProjectRun,
@@ -36,12 +38,14 @@ import {
   getRepo,
   getRunCommit,
   getRunCommits,
+  getRunTree,
   getRepoChanges,
   getRepoCommit,
   getRepoFile,
   getRepoTree,
   getRun,
   getRunChanges,
+  getRunGitStatus,
   getRunDiff,
   getRunDrafts,
   getRunFile,
@@ -66,9 +70,12 @@ import {
   getSelfUpdate,
   getSelfUpdateDevelopment,
   getStarCount,
+  getTelemetryConsent,
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
+  scheduleSelfUpdate,
+  cancelScheduledSelfUpdate,
   checkSkillsUpdate,
   applySkillsUpdate,
   getWorktrees,
@@ -78,6 +85,8 @@ import {
   patchRun,
   pinProjectRun,
   pinRun,
+  archiveProjectRun,
+  archiveRun,
   removeQueuedMessage,
   registerProject,
   openAgentAccountFile,
@@ -91,15 +100,18 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
   searchTrackerItems,
+  getRepoSync,
+  runRepoSyncAction,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
-import type { ContinueOptions } from './client'
+import type { ContinueOptions, RepoSyncAction } from './client'
 import type {
   CheckoutProjectInput,
+  CreateProjectInput,
   CreateAgentProfileInput,
   ApiRun,
   HealthResponse,
@@ -116,6 +128,7 @@ import type {
   RunRecord,
   SelectAgentProfileInput,
   SetAgentConfigInput,
+  TaskActionSurface,
   UpdateAgentProfileInput,
   UpdateProjectInput,
   TrackerAssociation,
@@ -180,12 +193,14 @@ export const queryKeys = {
     detail: (id: string) => [queryScope(), 'runs', 'detail', id] as const,
     diff: (id: string) => [queryScope(), 'runs', 'diff', id] as const,
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
+    gitStatus: (id: string) => [queryScope(), 'runs', 'git-status', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
      *  background — see `useRunDrafts`. */
     drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
+    tree: (id: string) => [queryScope(), 'runs', 'tree', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
   groups: {
@@ -226,6 +241,10 @@ export const queryKeys = {
     return [queryScope(), 'repo', 'changes'] as const
   },
   repoCommit: (sha: string) => [queryScope(), 'repo', 'commit', sha] as const,
+  /** Under `repo`, so a branch switch or a pull refreshes ahead/behind with everything else. */
+  get repoSync() {
+    return [queryScope(), 'repo', 'sync'] as const
+  },
   /** The Files sub-tab's path index (#1279) — also under `repo`, so a branch switch invalidates
    *  the tree along with the diff. */
   get repoTree() {
@@ -403,6 +422,8 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
+  githubOwners: ['workspace', 'github-owners'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -436,6 +457,8 @@ export const workspaceQueryKeys = {
   /** cezar's own GitHub star count via `GET /api/v1/star-count`, behind the sidebar's ⭐ ask.
    *  Workspace-led: the number is about cezar, not about whichever project is on screen. */
   starCount: ['workspace', 'star-count'] as const,
+  /** The opt-in telemetry answer via `GET /api/v1/telemetry/consent` — one per machine. */
+  telemetryConsent: ['workspace', 'telemetry-consent'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -854,6 +877,29 @@ export function useCheckoutProject() {
   })
 }
 
+/** Create a new project (`POST /api/projects/create`). Same invalidation and no-retry rule as
+ *  `useCheckoutProject`: a retry would race the server's cleanup and land on the 409, or worse,
+ *  try to create the GitHub repository twice. */
+export function useCreateProject() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateProjectInput) => createProject(input),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
+ *  membership does not change while a dialog is open, and each probe is two `gh api` calls. */
+export function useGithubOwners() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.githubOwners,
+    queryFn: ({ signal }) => getGithubOwners({ signal }),
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+}
+
 /**
  * The ONE session-long `health` topic subscription. Call it exactly once, at the app root
  * (`GlobalEventsProvider`) — never from `useHealth`.
@@ -944,7 +990,7 @@ export function useProjectRepoBase(): string | undefined {
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
   if (registered?.repoUrl) return registered.repoUrl
   const isBootProject = projectId === null || projectId === health?.bootProject
-  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+  return isBootProject ? githubRepoBase(health?.repo?.remote, health?.forge?.kind === 'github') : undefined
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;
@@ -1111,6 +1157,33 @@ export function useRunChanges(id: string | undefined, live = false) {
     // refetchOnWindowFocus off + a 5-min staleTime, #query-client) so returning to a finished
     // task's Changes tab re-fetches instead of serving the last, possibly-empty snapshot.
     refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** What the run's worktree has not published yet — the header's one git button reads it on
+ *  every tab, so it is the cheap `git status` answer rather than `/changes` and its patches.
+ *  Polled while the agent may still be writing; refetched on focus, like `useRunChanges`. */
+export function useRunGitStatus(id: string, enabled: boolean, live = false) {
+  return useQuery({
+    queryKey: queryKeys.runs.gitStatus(id),
+    queryFn: ({ signal }) => getRunGitStatus(id, { signal }),
+    enabled,
+    retry: false,
+    refetchInterval: live ? 10_000 : false,
+    refetchOnWindowFocus: true,
+    staleTime: 0,
+  })
+}
+
+/** A run's whole path index for the ⌘P palette's `#` file search. Read only while the palette is
+ *  in that mode; same freshness override as `useRepoTree` — the agent may be adding files. */
+export function useRunTree(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.tree(id ?? ''),
+    queryFn: ({ signal }) => getRunTree(id as string, { signal }),
+    enabled: enabled && Boolean(id),
+    retry: false,
     staleTime: 0,
   })
 }
@@ -1300,6 +1373,32 @@ export function useRepo() {
   })
 }
 
+/** The main checkout's sync state (spec 2026-10-19-repo-git-sync). Offline on the server, so
+ *  refetching on focus is cheap — it catches a commit or `git pull` made in a terminal. */
+export function useRepoSync() {
+  return useQuery({
+    queryKey: queryKeys.repoSync,
+    queryFn: ({ signal }) => getRepoSync({ signal }),
+    refetchOnWindowFocus: true,
+  })
+}
+
+/** Fetch / pull / push / sync. The answer carries the fresh status; a pull also moved HEAD, so
+ *  the log, diff and tree under `repo` are refetched too. */
+export function useRepoSyncAction() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (action: RepoSyncAction) => runRepoSyncAction(action),
+    onSuccess: (result) => {
+      queryClient.setQueryData(queryKeys.repoSync, result.sync)
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.repo,
+        predicate: (q) => q.queryKey[2] !== 'sync',
+      })
+    },
+  })
+}
+
 /** The main working tree's structured diff behind the repo view's Changes section (R5 1.7).
  *  Same 409 stance as `useRunChanges`: "not a git repository" is an answer, not a hiccup. */
 export function useRepoChanges() {
@@ -1449,22 +1548,35 @@ export function useAgentProfiles() {
   })
 }
 
+/** The chip's refresh cadence — matches the server's `STAR_CACHE_TTL_MS`, which also paces
+ *  itself to GitHub's rate limit, so a poll never costs more than one cached read. */
+export const STAR_COUNT_REFRESH_MS = 10_000
+
 /**
- * cezar's own star count, for the sidebar's ⭐ ask.
- *
- * `staleTime: Infinity` and no retry, both deliberate. The server already caches the number for
- * six hours and answers `{ available: false }` for every failure, so refetching it costs a round
- * trip that cannot produce a different answer — and a decorative count is the last thing in the
- * cockpit that should retry, poll, or hold the query client's attention. One read per session.
+ * cezar's own star count, for the sidebar's ⭐ ask — refreshed every ten seconds while the tab is
+ * visible (TanStack pauses `refetchInterval` in the background). No retry: the server answers
+ * `{ available: false }` for every failure, and the next tick is the retry.
  */
 export function useStarCount(enabled = true) {
   return useQuery({
     queryKey: workspaceQueryKeys.starCount,
     queryFn: ({ signal }) => getStarCount({ signal }),
     enabled,
-    staleTime: Infinity,
+    staleTime: STAR_COUNT_REFRESH_MS,
+    refetchInterval: STAR_COUNT_REFRESH_MS,
     retry: false,
     refetchOnMount: false,
+  })
+}
+
+/** The opt-in telemetry answer. Read by the consent bar and Settings → Privacy; both write
+ *  through `putTelemetryConsent` and set this cache from the answer. */
+export function useTelemetryConsent() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.telemetryConsent,
+    queryFn: ({ signal }) => getTelemetryConsent({ signal }),
+    staleTime: Infinity,
+    retry: false,
   })
 }
 
@@ -1510,7 +1622,9 @@ export function useSelfUpdate(enabled = true) {
     queryKey: workspaceQueryKeys.selfUpdate,
     queryFn: ({ signal }) => getSelfUpdate({ signal }),
     enabled,
-    refetchInterval: (query) => (query.state.data?.job?.status === 'running' ? 1_000 : false),
+    // A scheduled update can start while the dialog is open: watch for its job to appear.
+    refetchInterval: (query) =>
+      query.state.data?.job?.status === 'running' ? 1_000 : query.state.data?.scheduled ? 5_000 : false,
   })
 }
 
@@ -1553,6 +1667,22 @@ export function useApplySelfUpdate() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (version: string) => applySelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useScheduleSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (version: string) => scheduleSelfUpdate(version),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
+  })
+}
+
+export function useCancelScheduledSelfUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => cancelScheduledSelfUpdate(),
     onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdate, state),
   })
 }
@@ -1736,13 +1866,34 @@ function withoutReceipt(run: RunRecord): RunRecord {
  *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
  *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
  *    sidebar's boot group showing the pre-pin order.
+ *
+ * `surface` names the button for telemetry (`task_pinned`'s label).
  */
-export function usePinRun(projectId?: string, cacheScope?: string) {
+export function usePinRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
-      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+    // `surface` per call when one control can be reached two ways (⌘P: a row, or a shortcut).
+    mutationFn: ({ id, pinned, surface: via }: { id: string; pinned: boolean; surface?: TaskActionSurface }) =>
+      projectId === undefined
+        ? pinRun(id, pinned, via ?? surface)
+        : pinProjectRun(projectId, id, pinned, via ?? surface),
     // Hierarchical keys: this covers the list AND the open thread's own record.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
+      }),
+  })
+}
+
+/** Archive or restore one run from a list row — `usePinRun`'s twin, same two parameters and the
+ *  same invalidate-rather-than-patch rule (the answer moves the row between views). */
+export function useArchiveRun(surface: TaskActionSurface, projectId?: string, cacheScope?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, archived }: { id: string; archived: boolean }) =>
+      projectId === undefined
+        ? archiveRun(id, archived, surface)
+        : archiveProjectRun(projectId, id, archived, surface),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
