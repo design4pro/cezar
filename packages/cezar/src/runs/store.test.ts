@@ -1,7 +1,7 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
@@ -38,6 +38,40 @@ const LEGACY_RUN = {
   archived: false,
   steps: [],
 };
+
+describe('RunStore — uncreatable data dir (telemetry 5af5aec6)', () => {
+  let parent: string;
+
+  beforeEach(() => {
+    parent = mkdtempSync(join(tmpdir(), 'cez-store-ro-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    rmSync(parent, { recursive: true, force: true });
+  });
+
+  it('opens a working in-memory store instead of throwing, and persists once the dir becomes creatable', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A FILE where `.ai` should be: mkdir fails on every platform and as root, like EPERM did.
+    const blocker = join(parent, '.ai');
+    writeFileSync(blocker, '');
+    const dataDir = join(blocker, 'cezar');
+
+    const store = RunStore.open(dataDir);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('task history in this project will not be saved'));
+    const run = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
+    const live: unknown[] = [];
+    store.on('event', (e) => live.push(e));
+    expect(() => store.appendEvent(run.id, { type: 'note', text: 'one' })).not.toThrow();
+    expect(live).toHaveLength(1);
+    expect(store.getRun(run.id)?.id).toBe(run.id);
+
+    rmSync(blocker);
+    store.appendEvent(run.id, { type: 'note', text: 'two' });
+    expect(readFileSync(join(dataDir, 'runs', `${run.id}.ndjson`), 'utf8')).toContain('"text":"two"');
+  });
+});
 
 describe('RunStore — directional usage persistence', () => {
   let dataDir: string;
@@ -2286,5 +2320,238 @@ describe('RunStore — a save never drops another process’s runs', () => {
     store.updateRun(kept, { status: 'running' });
     store.flush();
     expect(idsOnDisk()).toEqual([kept]);
+  });
+});
+
+const SAVE_DEBOUNCE_WINDOW_MS = 1_000;
+
+describe('RunStore — seq rehydration from the persisted high-water mark', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-lastseq-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A run whose creation save already landed, so a later explicit save is the only thing left. */
+  function savedRun(store: RunStore): RunRecord {
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+    return run;
+  }
+
+  it('numbers above an ephemeral frame a client already saw, which the transcript never recorded', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    const delta = store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(delta.seq + 1);
+  });
+
+  it('does not schedule an index save for a stream that dirties nothing else', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    const saveNow = vi.spyOn(store as unknown as { saveNow: (...args: unknown[]) => void }, 'saveNow');
+
+    for (let index = 0; index < 60; index += 1) {
+      store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+      store.emitEphemeral(run.id, { type: 'item.delta', delta: 'x' });
+    }
+    vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS * 6);
+
+    expect(saveNow).not.toHaveBeenCalled();
+    store.flush();
+    expect(saveNow).toHaveBeenCalledTimes(1);
+  });
+
+  it('resumes from the record and the transcript tail without re-reading the whole transcript', () => {
+    vi.useFakeTimers();
+    const store = RunStore.open(dataDir);
+    const run = savedRun(store);
+    for (let index = 0; index < 50; index += 1) store.appendEvent(run.id, { type: 'note', message: `n${index}` });
+    store.flush();
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    const readEvents = vi.spyOn(reopened, 'readEvents');
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after restart' }).seq).toBe(51);
+    expect(readEvents).not.toHaveBeenCalled();
+  });
+
+  it('trusts the transcript tail over a record saved before the last appends', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, { type: 'note', message: 'one' });
+    store.flush();
+    const events = join(dataDir, 'runs', `${run.id}.ndjson`);
+    for (let seq = 2; seq <= 5; seq += 1) {
+      appendFileSync(events, `${JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) })}\n`);
+    }
+    appendFileSync(events, '{"seq":6,"ty');
+
+    const reopened = RunStore.open(dataDir, { keepLive: true });
+    expect(reopened.getRun(run.id)?.lastSeq).toBe(1);
+    expect(reopened.appendEvent(run.id, { type: 'note', message: 'after crash' }).seq).toBe(6);
+  });
+
+  it('falls back to the full transcript maximum for a record written before lastSeq existed', () => {
+    const lines = [9, 4].map((seq) => JSON.stringify({ seq, ts: 'x', type: 'note', message: String(seq) }));
+    writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]));
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(join(dataDir, 'runs', `${LEGACY_RUN.id}.ndjson`), `${lines.join('\n')}\n`);
+
+    const store = RunStore.open(dataDir);
+    expect(store.appendEvent(LEGACY_RUN.id, { type: 'note', message: 'next' }).seq).toBe(10);
+  });
+});
+
+describe('RunStore — runs.json encoding', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-encoding-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('writes compact by default, both on the debounce and on a plain flush', () => {
+    vi.useFakeTimers();
+    try {
+      const store = RunStore.open(dataDir);
+      store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+      vi.advanceTimersByTime(SAVE_DEBOUNCE_WINDOW_MS);
+
+      const indexPath = join(dataDir, 'runs.json');
+      expect(readFileSync(indexPath, 'utf8')).not.toContain('\n');
+
+      store.flush();
+      const plainFlush = readFileSync(indexPath, 'utf8');
+      expect(plainFlush).not.toContain('\n');
+      expect(JSON.parse(plainFlush)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('writes indented only when the shutdown flush asks for it', () => {
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 't', workflow: 'w', task: 't', steps: [{ id: 's1', name: 'Agent', kind: 'agent' }] });
+    store.flush({ pretty: true });
+
+    const indexPath = join(dataDir, 'runs.json');
+    const flushed = readFileSync(indexPath, 'utf8');
+    expect(flushed).toContain('\n  ');
+    expect(JSON.parse(flushed)).toEqual(JSON.parse(JSON.stringify(store.listRuns())));
+  });
+});
+
+describe('RunStore — janitor cost once its answer is settled (#540)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-janitor-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const issue = (n: number) => `https://github.com/o/r/issues/${n}`;
+
+  function settledRun(task = 'task') {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/1' });
+    for (let n = 1; n <= 8; n += 1) store.appendEvent(run.id, { type: 'note', message: `see ${issue(n)}` });
+    return { store, run };
+  }
+
+  it('skips the haystack once the PR is adopted and the issue working set is capped', () => {
+    const { store, run } = settledRun();
+    const before = structuredClone(store.getRun(run.id));
+    const track = vi.spyOn(store as unknown as { trackReferencedIssues: () => boolean }, 'trackReferencedIssues');
+
+    store.appendEvent(run.id, { type: 'text', text: `now ${issue(9)}` });
+
+    expect(track).not.toHaveBeenCalled();
+    expect({ ...store.getRun(run.id), lastSeq: before?.lastSeq }).toEqual(before);
+  });
+
+  it('keeps seeding issueNumber while a resolved issue has none, even at the cap', () => {
+    const { store, run } = settledRun('fix #3');
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBe(issue(3));
+    store.updateRun(run.id, { issueNumber: undefined });
+
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.issueNumber).toBe(3);
+  });
+
+  it('keeps a repo handle that lands after settling in force for later events', () => {
+    const { store, run } = settledRun('fix #3');
+    store.appendEvent(run.id, { type: 'text', text: `working on ${issue(3)}` });
+    expect(store.getRun(run.id)).toMatchObject({ referencedIssueUrl: issue(3), issueNumber: 3 });
+
+    store.setRepoHandle({ owner: 'open-mercato', name: 'cezar' });
+    store.appendEvent(run.id, { type: 'text', text: `still on ${issue(3)}` });
+
+    expect(store.getRun(run.id)?.referencedIssueUrl).toBeUndefined();
+    expect(store.getRun(run.id)?.issueNumber).toBeUndefined();
+  });
+
+  it('bounds how much of a tool input it searches for references', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 't', steps: [] });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w1', status: 'completed', input: { content: `${'x'.repeat(10_000)} ${issue(7)}` } },
+    });
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: { kind: 'tool', id: 'w2', status: 'completed', input: { command: `gh issue view ${issue(8)}` } },
+    });
+
+    expect(store.getRun(run.id)?.referencedIssueCandidates).toEqual([issue(8)]);
+  });
+});
+
+describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-prune-'));
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps an old running parent and its dispatch root when new runs push it past the cap', () => {
+    const store = RunStore.open(dataDir);
+    let clock = Date.parse('2026-01-01T00:00:00.000Z');
+    const create = (title: string) => {
+      vi.setSystemTime((clock += 1_000));
+      return store.createRun({ title, workflow: 'quick-task', task: title, steps: [] });
+    };
+    const root = create('root');
+    const parent = create('parent');
+    const stale = create('stale done run');
+    store.updateRun(root.id, { status: 'review', dispatch: { rootRunId: root.id } });
+    store.updateRun(parent.id, { status: 'running', dispatch: { rootRunId: root.id, parentRunId: root.id } });
+    store.updateRun(stale.id, { status: 'done' });
+    for (let i = 0; i < 300; i++) create(`filler ${i}`);
+
+    expect(store.getRun(parent.id)).toBeDefined();
+    expect(store.getRun(root.id)).toBeDefined();
+    expect(store.getRun(stale.id)).toBeUndefined();
+    // The dispatch path's next write after creating a child: it threw `unknown run` before.
+    expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
   });
 });

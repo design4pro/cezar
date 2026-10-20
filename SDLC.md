@@ -203,6 +203,16 @@ These operating rules were learned the hard way and apply to every repository ru
 
 The labels in `.ai/agentic.config.json` must exist first (`gh label create <label>`). To stop it all, `cez automation pause <id>`, or start the cockpit with `CEZ_AUTOMATIONS=0`.
 
+## Release lines and backports
+
+`main` is the next minor; each released minor lives on `release/vX.Y.x`, which takes fixes only ([docs/publishing.md § Release lines](docs/publishing.md#release-lines) has the workflows).
+
+- **Every PR targets `main`** — features, fixes, docs alike. Never push to `release/v*`, and open a PR against one by hand only for the hotfix case below.
+- **A fix that users of the released line need gets `backport release/vX.Y.x`** (the newest line: `git branch -r --list 'origin/release/v*'`). Default to it for `priority-high`/`priority-extreme` bugs, regressions and telemetry fixes whose bug exists on that line; skip it for features, refactors, and bugs introduced after the cut. Put the label on the issue when triaging and on the PR when opening it — only the PR's label triggers the backport. The `backport …` labels are outside label normalization: never remove one.
+- **The Backport workflow does the cherry-pick** once the PR is merged and opens a PR into the line. Review it as a real PR: CI is green *and* the fix makes sense in that line's code. On a conflict it opens a draft — resolve it on that branch, or close it and port the fix by hand in a PR against the line where the code actually lives.
+- **A hotfix that cannot wait for `main`** may target `release/vX.Y.x` directly; label it `backport main` so it is forward-ported.
+- **Versions and releases are workflows, run by a maintainer**: *Release cut* (from `main`) and *Release* (from a line). Never edit a version or the lockfile's workspace versions by hand, and an agent never dispatches either workflow. Release notes are generated from merged PRs unless a `# Unreleased` section at the top of `CHANGELOG.md` already says it better — add one on `main` before a cut, or backport it to the line before a patch.
+
 ## Amending this process
 
 This document and `.ai/agentic.config.json` describe the same process: change them together, and re-run the `om-setup-agent-pipeline` skill when the toolchain or label taxonomy changes. Per-skill deviations — extra review rules, a different PR body template, an added gate step — belong in a repo-local skill of the same name at `.ai/skills/<skill-name>/SKILL.md`, which takes precedence over the installed skill (and can `@`-import or reference it to extend rather than replace it); local rules win, but a repo-local skill cannot grant what the installed skill's safety rules forbid.

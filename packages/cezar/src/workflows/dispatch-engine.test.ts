@@ -247,7 +247,9 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     it('releases a settled child’s unspent budget to the parent', async () => {
       // Default slots: the parked parent and its child must both be able to run.
       const parent = await parkedRoot(5);
-      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4 }));
+      // Titled: the report quotes the title, and a `mock:done` in it would settle the parent's mock
+      // before the second dispatch below.
+      const first = dispatchOk(parent.id, order('mock:done quick', { max_cost: 4, title: 'quick' }));
       expect(refusal(parent.id, order('second', { max_cost: 3 }))).toMatch(/only \$[\d.]+ of the budget is left/);
       await waitFor(first.id, settled);
       // The first child settled far under its cap (a dry run costs cents at most), so its
@@ -556,6 +558,26 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(child.id)?.status).toBe('done'); // the mock answers a digest with DONE
       expect(delivered(stdinFile, '## Tree inbox')).toContain('from-parent.md');
       expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
+    }, 60_000);
+
+    // #997: the Guard park wins over an inbox delivery even when task-reference lines trail the
+    // marker. The guard runs BEFORE the ask is resolved and a delivery auto-continues the turn,
+    // so reading the raw text there let a sibling's message answer the question instead of the
+    // human — and suppressed the ask card the normalization had just recovered.
+    it('keeps a Guard question ahead of an inbox delivery when task references trail it', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-own-inbox-ask-refs.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const root = store.createRun({ title: 'root', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', dispatch: rootOf(root.id) });
+      const child = start('mock:pause mock:ask-refs which library?', childOf(root.id), { autonomous: true });
+      await waitFor(child.id, () => stdin(stdinFile).includes('which library?'));
+      const inbox = join(treeDirOf(root.id), 'inbox', child.id.slice(0, 8));
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'from-parent.md'), '# Redirect\n\nStop at the API layer.\n');
+      await waitFor(child.id, (r) => r?.status === 'waiting', 40_000);
+      expect(store.getRun(child.id)?.dispatch?.pendingAsk?.questions).toHaveLength(1);
+      expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(false);
     }, 60_000);
 
     it('keeps an inbox delivery ahead of a monitoring park at turn end', async () => {
