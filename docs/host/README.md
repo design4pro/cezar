@@ -374,7 +374,11 @@ Then, per managed project and in this order:
    the base branch (`gh pr list` with each head's `statusCheckRollup`, and the compare API for how
    far behind each is) and:
    - merges the base into one that is behind and mergeable, through GitHub's `update-branch` with
-     the head it read as `expected_head_sha` (a push since the read makes GitHub refuse). It starts
+     the head it read as `expected_head_sha` (a push since the read makes GitHub refuse), but only
+     when the base branch requires an up-to-date branch (a ruleset's
+     `strict_required_status_checks_policy`, or classic protection's `strict`; read each tick, and
+     unreadable counts as not required). Where it does not, the update restarts CI for nothing
+     and a behind pull request is judged on its checks as it is. It starts
      no run, so it spends no slot and no `--max-launch`, and a usage limit does not stop it. QA
      and risk labels do not hold it (owner decision 2026-10-06): every open pull request is
      processed until it merges;

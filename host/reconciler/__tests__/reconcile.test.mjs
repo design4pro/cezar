@@ -33,6 +33,7 @@ import {
   parsePlan,
   pruneState,
   recoveryText,
+  requiresUpToDate,
   retryableReceipts,
   slotsHeld,
   targetIssue,
@@ -313,6 +314,7 @@ describe("pull requests", () => {
     author: { login: "rafalwolak", is_bot: false },
     labels: [],
     behindBy: 2,
+    baseRequiresUpToDate: true,
     ...over,
   });
   const tick = (prs, over = {}) => decide(snapshot([project("pt", { prs, ...over.project })], over));
@@ -328,6 +330,16 @@ describe("pull requests", () => {
     const paused = tick([pr()], { project: { runs: [parked] } });
     expect(ofType(paused, "pause")).toHaveLength(1);
     expect(ofType(paused, "update-branch")).toEqual([update]);
+  });
+
+  it("reads a requirement for an up-to-date branch from a ruleset or from classic protection", () => {
+    const strict = (value) => [{ type: "required_status_checks", parameters: { strict_required_status_checks_policy: value } }];
+    expect(requiresUpToDate({ rules: strict(true) })).toBe(true);
+    expect(requiresUpToDate({ protection: { strict: true } })).toBe(true);
+    expect(requiresUpToDate({ rules: strict(false), protection: { strict: false } })).toBe(false);
+    expect(requiresUpToDate({ rules: [{ type: "pull_request" }] })).toBe(false);
+    expect(requiresUpToDate({})).toBe(false);
+    expect(requiresUpToDate()).toBe(false);
   });
 
   // design4pro 2026-10-06: #798 (risk-high) and #880 (security) sat behind develop for good. The
@@ -394,6 +406,16 @@ describe("pull requests", () => {
     { __typename: "CheckRun", name: "unit", workflowName: "CI", status: "COMPLETED", conclusion: "SUCCESS" },
     { __typename: "CheckRun", name: "e2e", workflowName: "CI", status: "COMPLETED", conclusion },
   ];
+
+  // planned.travel ADR 0037 turned strict checks off: every update-branch restarted CI (and voided
+  // an agent attestation) on a pull request that could merge as it was.
+  it("does not merge the base into a pull request when the base does not require an up-to-date branch", () => {
+    for (const baseRequiresUpToDate of [false, undefined]) {
+      expect(ofType(tick([pr({ baseRequiresUpToDate })]), "update-branch")).toEqual([]);
+    }
+    const green = pr({ baseRequiresUpToDate: false, statusCheckRollup: rollup("SUCCESS") });
+    expect(launches(tick([green]))).toEqual(["pt:#877"]);
+  });
 
   // planned.travel 2026-10-05: #779 failed its own e2e journeys, got `qa-approved` by hand, and no
   // event started anything on it: the automations fire on `opened` and `reviewed` only.

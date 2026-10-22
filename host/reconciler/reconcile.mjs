@@ -401,7 +401,9 @@ function prNeed(pr) {
   if (pr.mergeable === "CONFLICTING") return "resolve-conflicts";
   // QA and risk labels hold nothing (owner decision 2026-10-06): pr-autopilot judges them with
   // agents before it merges, and `PR_HANDS_OFF` holds the rest.
-  if (pr.behindBy > 0) return "update";
+  // Only a base that requires an up-to-date branch needs the merge: elsewhere it restarts CI for
+  // nothing. Anything but a positive reading counts as "not required" (fail closed, no update).
+  if (pr.behindBy > 0 && pr.baseRequiresUpToDate === true) return "update";
   const checks = checksState(pr.statusCheckRollup);
   if (checks === "failed") return "fix-checks";
   if (checks === "passed") return "merge";
@@ -882,8 +884,35 @@ function readPlan({ id, root }) {
   }
 }
 
+/**
+ * Whether the base branch makes a pull request be up to date before it merges: a ruleset's
+ * `required_status_checks` rule with `strict_required_status_checks_policy`
+ * (`GET repos/:repo/rules/branches/:base`), or classic protection's `strict`. Anything unreadable
+ * is false.
+ */
+export function requiresUpToDate({ rules, protection } = {}) {
+  const byRuleset = Array.isArray(rules)
+    && rules.some((rule) => rule?.type === "required_status_checks" && rule.parameters?.strict_required_status_checks_policy === true);
+  return byRuleset || protection?.strict === true;
+}
+
 const PR_FIELDS =
   "number,baseRefName,headRefName,headRefOid,isDraft,isCrossRepository,mergeable,author,labels,statusCheckRollup";
+
+/** Each read may fail (no admin rights for classic protection, no rules): that reads as not required. */
+function readBaseRequiresUpToDate(root, repo, base, id) {
+  const read = (path) => {
+    try {
+      return JSON.parse(ghApi(root, ["-X", "GET", path]));
+    } catch {
+      return undefined;
+    }
+  };
+  const rules = read(`repos/${repo}/rules/branches/${base}`);
+  const protection = read(`repos/${repo}/branches/${base}/protection/required_status_checks`);
+  if (rules === undefined) log(id, `pull requests: rules of ${base} unreadable, treating it as not requiring an up-to-date branch`);
+  return requiresUpToDate({ rules, protection });
+}
 
 /** The open pull requests into the base branch, each with `behindBy`; null with the reason logged. */
 function readPrs({ id, root }) {
@@ -891,11 +920,13 @@ function readPrs({ id, root }) {
     const base = readJson(join(root, ".ai/agentic.config.json"))?.baseBranch;
     if (!base) throw new Error("no baseBranch in .ai/agentic.config.json");
     const repo = repoOf(root);
+    const baseRequiresUpToDate = readBaseRequiresUpToDate(root, repo, base, id);
     const prs = JSON.parse(
       run("gh", ["pr", "list", "--base", base, "--state", "open", "--limit", "100", "--json", PR_FIELDS], { cwd: root }),
     );
     return prs.map((pr) => ({
       ...pr,
+      baseRequiresUpToDate,
       behindBy: Number(ghApi(root, ["-X", "GET", `repos/${repo}/compare/${base}...${pr.headRefOid}`, "-q", ".behind_by"])),
     }));
   } catch (error) {
