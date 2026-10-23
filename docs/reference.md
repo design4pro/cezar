@@ -262,6 +262,7 @@ steps:
     # model: opus                # optional per-step model override
     # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
+    # timeoutMinutes: 90         # optional wall clock for this agent step (default 30)
   - id: verify
     name: Verify
     command: "npm test"          # a check step: exit 0 passes
