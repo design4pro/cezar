@@ -43,6 +43,10 @@ export const workflowStepSchema = z
     runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    /** Agent steps only: the session's wall clock in minutes, in place of the runner's 30-min
+     *  default (`DEFAULT_RUN_TIMEOUT_MS`). A step that outlives it is killed and the rest of the
+     *  chain is left to a free-form Continue. The final interactive step keeps no wall clock. */
+    timeoutMinutes: z.number().int().positive().optional(),
     // check step
     command: z.string().optional(),
     onFail: z
@@ -69,6 +73,9 @@ export const workflowStepSchema = z
   })
   .refine((s) => !s.secrets || Boolean(s.command), {
     message: 'secrets: is for check steps only — an agent step never receives a secret',
+  })
+  .refine((s) => s.timeoutMinutes === undefined || !s.command, {
+    message: 'timeoutMinutes: is for agent steps only',
   });
 
 /**
@@ -147,7 +154,7 @@ export function skillStackOf(steps: WorkflowStepDef[]): string[] | null {
     if (stepKind(s) !== 'agent' || !s.skill) return null;
     if (s.prompt !== undefined && s.prompt !== '{{task}}') return null;
     if (s.name !== undefined && s.name !== s.skill) return null;
-    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.onFail) return null;
+    if (s.model || s.runner || s.allowedTools || s.bashAllowlist || s.timeoutMinutes || s.onFail) return null;
     skills.push(s.skill);
   }
   return skills.length ? skills : null;

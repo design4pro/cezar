@@ -32,6 +32,8 @@ export const workflowStepDefSchema = z
     runner: runnerSchema.optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
+    /** Agent steps only: the session's wall clock in minutes (default 30). */
+    timeoutMinutes: z.number().int().positive().optional(),
     // check step
     command: z.string().optional(),
     onFail: z
@@ -51,6 +53,9 @@ export const workflowStepDefSchema = z
   })
   .refine((s) => !s.secrets || Boolean(s.command), {
     message: 'secrets: is for check steps only — an agent step never receives a secret',
+  })
+  .refine((s) => s.timeoutMinutes === undefined || !s.command, {
+    message: 'timeoutMinutes: is for agent steps only',
   });
 export type WorkflowStepDef = z.infer<typeof workflowStepDefSchema>;
 
