@@ -747,7 +747,9 @@ export async function createOrSwitchBranch(
     const start = await git(dir, ['rev-parse', '--verify', '--quiet', `${from}^{commit}`]);
     if (!start.ok) return { ok: false, error: `unknown start point: ${from}` };
   }
-  const create = await git(dir, from ? ['checkout', '-b', name, from] : ['checkout', '-b', name]);
+  // `--no-track`: a remote-tracking start point (`origin/main`, from `chooseForkBase`) would
+  // otherwise become this branch's upstream, and a bare `git push` would then land on `main`.
+  const create = await git(dir, from ? ['checkout', '--no-track', '-b', name, from] : ['checkout', '-b', name]);
   if (!create.ok) return { ok: false, error: gitReason(create, `git checkout -b ${name} failed`) };
   return { ok: true, branch: name, created: true };
 }
@@ -845,7 +847,7 @@ export type PushResult =
   | { ok: true; branch: string; remote: string; upstreamSet: boolean }
   | { ok: false; error: string };
 
-/** Push the current branch, setting upstream when it has none. No remote,
+/** Push the current branch, setting upstream when it has none or tracks another branch. No remote,
  *  detached HEAD and rejected pushes all degrade to `{ ok:false, error }`. */
 export async function pushCurrentBranch(dir: string): Promise<PushResult> {
   const branchRes = await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD']);
@@ -860,9 +862,13 @@ export async function pushCurrentBranch(dir: string): Promise<PushResult> {
     return { ok: false, error: 'no remote configured — add one with `git remote add origin <url>`' };
   }
   const remote = (await resolveTaskRemotes((args) => git(dir, args))).push ?? (remotes[0] as string);
-  const upstream = await git(dir, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
-  const args = upstream.ok ? ['push'] : ['push', '-u', remote, branch];
+  // A bare `git push` only when the upstream is this branch's namesake. An upstream such as
+  // `origin/main` sends it to `main` under `push.default=upstream`, so push by explicit refspec
+  // and repoint the upstream instead.
+  const merge = await git(dir, ['config', '--get', `branch.${branch}.merge`]);
+  const ownUpstream = merge.ok && merge.stdout.trim() === `refs/heads/${branch}`;
+  const args = ownUpstream ? ['push'] : ['push', '-u', remote, `HEAD:refs/heads/${branch}`];
   const push = await git(dir, args);
   if (!push.ok) return { ok: false, error: gitReason(push, 'git push failed') };
-  return { ok: true, branch, remote, upstreamSet: !upstream.ok };
+  return { ok: true, branch, remote, upstreamSet: !ownUpstream };
 }

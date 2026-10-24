@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { mkdirSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import { renameWithRetry } from './fs-rename.ts';
+import { atomicTmpPath, renameWithRetry } from './fs-rename.ts';
 import { z } from 'zod';
 
 /**
@@ -101,7 +101,7 @@ async function readRaw(dataDir: string): Promise<{ items: TodoItem[]; needsRewri
 
 async function writeAtomic(dataDir: string, items: TodoItem[]): Promise<void> {
   const file = todosPath(dataDir);
-  const tmp = `${file}.tmp`;
+  const tmp = atomicTmpPath(file);
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(tmp, JSON.stringify(items, null, 2), 'utf8');
   await renameWithRetry(tmp, file);

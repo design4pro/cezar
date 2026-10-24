@@ -16,6 +16,8 @@ import { join } from 'node:path';
 export const DATA_GITIGNORE_ENTRIES = [
   'runs.json',
   'runs.json.tmp',
+  'runs.json.*.tmp',
+  'runs.json.corrupt-*', // an index `open()` could not load, kept before the next save rewrites it
   'runs/',
   'dispatch/', // filesystem channel for dispatched task trees
   // The per-project attachment library (#929): every named file a user attaches to any task is
@@ -35,6 +37,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   'layouts/', // unsent composer text + pasted screenshots (#939) — never in git history
   'todos.json',
   'todos.json.tmp',
+  'todos.json.*.tmp',
   // Private, per-project MCP servers (spec 2026-10-07-private-project-mcp) — personal tokens.
   'mcp.local.json',
   'mcp.local.json.cez-tmp-*',
@@ -45,12 +48,16 @@ export const DATA_GITIGNORE_ENTRIES = [
   'launch-key',
   'automations.json',
   'automations.json.tmp',
+  'automations.json.*.tmp',
   'automation-state.json',
   'automation-state.json.tmp',
+  'automation-state.json.*.tmp',
   'automation-receipts.ndjson',
   'automation-receipts.ndjson.tmp',
+  'automation-receipts.ndjson.*.tmp',
   'automation-log.ndjson',
   'automation-log.ndjson.tmp',
+  'automation-log.ndjson.*.tmp',
   'automation-poll.lock',
   'automation-poll.lock.guard/',
   'automation-mutation.lock.guard/',

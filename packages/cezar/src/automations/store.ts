@@ -10,7 +10,7 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import lockfile from 'proper-lockfile';
-import { renameSyncWithRetry } from '../fs-rename.ts';
+import { atomicTmpPath, renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep } from '../core/secret-redaction.ts';
 import { join } from 'node:path';
 import {
@@ -434,7 +434,7 @@ export class AutomationStore {
   private atomicJson(filename: string, value: unknown): void {
     mkdirSync(this.dataDir, { recursive: true });
     const path = join(this.dataDir, filename);
-    const temporary = `${path}.tmp`;
+    const temporary = atomicTmpPath(path);
     writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
     renameSyncWithRetry(temporary, path);
   }
@@ -452,7 +452,7 @@ export class AutomationStore {
 
   private rewriteNdjson(filename: string, rows: unknown[]): void {
     const path = join(this.dataDir, filename);
-    const temporary = `${path}.tmp`;
+    const temporary = atomicTmpPath(path);
     writeFileSync(temporary, rows.map((row) => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : ''), {
       mode: 0o600,
     });

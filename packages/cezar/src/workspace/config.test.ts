@@ -40,9 +40,9 @@ vi.mock('node:fs', async () => {
   };
 });
 
+import { atomicTmpPath } from '../fs-rename.ts';
 import { workspaceConfigPath } from '../paths.ts';
 import {
-  atomicTmpPath,
   atomicWriteJsonSync,
   defaultWorkspaceConfig,
   effectiveSkillsAutoUpdate,
