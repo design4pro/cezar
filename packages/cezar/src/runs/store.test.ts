@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -2553,5 +2553,51 @@ describe('RunStore — pruning spares live runs (telemetry 73c6e796)', () => {
     expect(store.getRun(stale.id)).toBeUndefined();
     // The dispatch path's next write after creating a child: it threw `unknown run` before.
     expect(() => store.appendEvent(parent.id, { type: 'note', message: 'dispatched' })).not.toThrow();
+  });
+});
+
+describe('RunStore — an index that cannot be read loses nothing', () => {
+  let dataDir: string;
+  const UNPARSEABLE = '[{"id": "hand-edited", "title": "a trailing comma",}]';
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('keeps the bytes of a runs.json it could not parse before the next save rewrites it', () => {
+    writeFileSync(join(dataDir, 'runs.json'), UNPARSEABLE, 'utf8');
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 'new', workflow: 'quick-task', task: 'new', steps: [] });
+    store.flush();
+
+    const backups = readdirSync(dataDir).filter((name) => name.startsWith('runs.json.corrupt-'));
+    expect(backups).toHaveLength(1);
+    expect(readFileSync(join(dataDir, backups[0] as string), 'utf8')).toBe(UNPARSEABLE);
+  });
+
+  it('counts a run whose event file is on disk as known, though the index lost it', () => {
+    const lost = '11111111-1111-4111-8111-111111111111';
+    mkdirSync(join(dataDir, 'runs'), { recursive: true });
+    writeFileSync(join(dataDir, 'runs', `${lost}.ndjson`), '{"seq":1,"type":"note","message":"x"}\n', 'utf8');
+    writeFileSync(join(dataDir, 'runs.json'), UNPARSEABLE, 'utf8');
+
+    expect(RunStore.open(dataDir).knownRunIds()).toContain(lost);
+  });
+
+  it('stages its save through its own tmp file, never one another writer is half-way through', () => {
+    // Another process (a `cezar run` beside the cockpit) has written its staging file and is
+    // about to rename it. A shared `runs.json.tmp` name meant our save truncated and consumed it.
+    const theirs = join(dataDir, 'runs.json.tmp');
+    writeFileSync(theirs, 'the other writer, mid-save', 'utf8');
+    const store = RunStore.open(dataDir);
+    store.createRun({ title: 'mine', workflow: 'quick-task', task: 'mine', steps: [] });
+    store.flush();
+
+    expect(readFileSync(theirs, 'utf8')).toBe('the other writer, mid-save');
+    expect(readdirSync(dataDir).filter((name) => name.endsWith('.tmp'))).toEqual(['runs.json.tmp']);
   });
 });

@@ -1,21 +1,23 @@
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   fstatSync,
   mkdirSync,
   openSync,
   readFileSync,
   readSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { StreamRedaction } from './stream-redaction.ts';
-import { renameSyncWithRetry } from '../fs-rename.ts';
+import { atomicTmpPath, renameSyncWithRetry } from '../fs-rename.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
@@ -852,6 +854,22 @@ function createdPrUrl(haystack: string): string | undefined {
  * paths that never recover, and the index reader, which has no manager at all — live-looking runs
  * are marked failed so no ghost stays behind.
  */
+/**
+ * Keep the bytes of an index `open()` could not load: the next save rewrites `runs.json` with only
+ * the records this process holds. Named by content hash, so reopening the same bad file does not
+ * pile up copies. Best effort.
+ */
+function backUpUnreadableIndex(indexPath: string): void {
+  try {
+    const bytes = readFileSync(indexPath);
+    const backup = `${indexPath}.corrupt-${createHash('sha256').update(bytes).digest('hex').slice(0, 12)}`;
+    if (!existsSync(backup)) copyFileSync(indexPath, backup);
+    console.error(`[cez] could not load ${indexPath}; its contents are kept in ${backup}`);
+  } catch {
+    // a read-only data dir keeps the original file untouched anyway
+  }
+}
+
 export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }): RunRecord {
   // A run that was live when the previous process exited can never finish —
   // surface that instead of a forever-"running" ghost. `review` survives
@@ -976,13 +994,34 @@ export class RunStore extends EventEmitter {
           pruneOrphanLayouts(dataDir, new Set(store.runs.keys()), ORPHAN_LAYOUT_GRACE_MS);
         } else {
           store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
+          backUpUnreadableIndex(indexPath);
         }
       } catch {
         store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         // corrupt index — start fresh; event files stay on disk untouched
+        backUpUnreadableIndex(indexPath);
       }
     }
     return store;
+  }
+
+  /**
+   * Every run id this project still holds data for: the index, plus each run whose event file is
+   * on disk. The startup orphan sweep keys on this, never on the index alone — an index that lost
+   * records (corrupt, written by another version, deleted) otherwise got every task's worktree and
+   * branch force-deleted. `deleteRun` and the retention trim remove the event file, so a run that
+   * was really deleted still counts as gone.
+   */
+  knownRunIds(): Set<string> {
+    const ids = new Set(this.runs.keys());
+    try {
+      for (const name of readdirSync(join(this.dataDir, 'runs'))) {
+        if (name.endsWith('.ndjson')) ids.add(name.slice(0, -'.ndjson'.length));
+      }
+    } catch {
+      // no runs/ directory yet
+    }
+    return ids;
   }
 
   /**
@@ -1886,7 +1925,7 @@ export class RunStore extends EventEmitter {
 
   private saveNow(throwOnError = false, pretty = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
-    const tmpPath = `${indexPath}.tmp`;
+    const tmpPath = atomicTmpPath(indexPath);
     try {
       writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, pretty ? 2 : undefined), 'utf8');
       renameSyncWithRetry(tmpPath, indexPath);

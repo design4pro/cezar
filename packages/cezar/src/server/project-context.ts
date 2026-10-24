@@ -241,7 +241,7 @@ export class ProjectContexts {
       // best-effort sweeps serveCommand runs for the boot project, gated on the
       // root actually being a git repo.
       if (await getRepoInfo(project.root)) {
-        await pruneOrphans(project.root, new Set(store.listRuns().map((r) => r.id)), id => manager.lifecycle.allowOrphanPrune(id)).catch(
+        await pruneOrphans(project.root, store.knownRunIds(), id => manager.lifecycle.allowOrphanPrune(id)).catch(
           () => [] as string[],
         );
         const keep = await resolveWorktreeRetention(project.root).catch(

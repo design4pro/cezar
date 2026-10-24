@@ -1289,6 +1289,54 @@ describe('commitAll / pushCurrentBranch — direct degradation paths', () => {
   });
 });
 
+/** An in-place run forks its branch from `origin/main` when the local `main` is stale
+ *  (`chooseForkBase`). That start point must not become the branch's upstream, and a push must
+ *  never follow such an upstream onto `main` — under `push.default=upstream` it did. */
+describe('in-place branch from a remote-tracking base — never pushes onto the base', () => {
+  let dir: string;
+  let remote: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cez-inplace-'));
+    remote = mkdtempSync(join(tmpdir(), 'cez-inplace-remote-'));
+    initRepo(dir);
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    g(remote, 'init', '--bare', '-b', 'main');
+    g(dir, 'remote', 'add', 'origin', remote);
+    g(dir, 'push', '-q', 'origin', 'main');
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(remote, { recursive: true, force: true });
+  });
+
+  it('creates the branch without tracking its start point', async () => {
+    const res = await createOrSwitchBranch(dir, 'task-x', 'origin/main');
+    expect(res).toEqual({ ok: true, branch: 'task-x', created: true });
+    expect(() => g(dir, 'config', '--get', 'branch.task-x.merge')).toThrow();
+  });
+
+  it('pushes a branch that tracks origin/main to its own name, not to main', async () => {
+    // A branch the unfixed code already created this way, in a repo set up like planned.travel.
+    g(dir, 'checkout', '-q', '--track', '-b', 'task-y', 'origin/main');
+    g(dir, 'config', 'push.default', 'upstream');
+    writeFileSync(join(dir, 'b.txt'), 'b\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'task work');
+    const mainBefore = g(remote, 'rev-parse', 'refs/heads/main').trim();
+
+    const res = await pushCurrentBranch(dir);
+
+    expect(res).toMatchObject({ ok: true, branch: 'task-y', remote: 'origin', upstreamSet: true });
+    expect(g(remote, 'rev-parse', 'refs/heads/main').trim()).toBe(mainBefore);
+    expect(g(remote, 'rev-parse', 'refs/heads/task-y').trim()).toBe(g(dir, 'rev-parse', 'HEAD').trim());
+    expect(g(dir, 'config', '--get', 'branch.task-y.merge').trim()).toBe('refs/heads/task-y');
+  });
+});
+
 describe('worktreeGitStatus — what has not left the worktree', () => {
   it('counts uncommitted files (untracked and renamed included) and reports no upstream as null', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'cez-gitstatus-'));

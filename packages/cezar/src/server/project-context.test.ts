@@ -1,9 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AutomationStore } from '../automations/store.ts';
 import { emitUsageForTest } from '../core/process-usage.ts';
+import { createWorktree } from '../git-worktree.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContextSource } from './project-context.ts';
 
 /**
@@ -207,5 +209,53 @@ describe('ProjectContexts', () => {
     emitUsageForTest({});
     expect(spyA).not.toHaveBeenCalled();
     expect(spyB).not.toHaveBeenCalled();
+  });
+});
+
+/** The startup orphan sweep deleted every task's worktree and branch whenever runs.json could
+ *  not be loaded: the index read as empty, so every worktree looked like an orphan. */
+describe('ProjectContexts — orphan sweep over an unreadable index', () => {
+  const GIT = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
+  let root: string;
+
+  beforeEach(async () => {
+    root = mkdtempSync(join(tmpdir(), 'cez-ctx-orphans-'));
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    writeFileSync(join(root, 'base.txt'), 'base\n');
+    execFileSync('git', ['add', '-A'], { cwd: root });
+    execFileSync('git', [...GIT, 'commit', '-q', '-m', 'base'], { cwd: root });
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true, maxRetries: 5 });
+  });
+
+  async function taskWorktree(runId: string, withEvents: boolean): Promise<{ path: string; branch: string }> {
+    const wt = await createWorktree(root, runId, 'main');
+    writeFileSync(join(wt.path, 'unsaved.txt'), 'agent work not yet committed\n');
+    if (withEvents) {
+      mkdirSync(join(root, '.ai/cezar/runs'), { recursive: true });
+      writeFileSync(join(root, '.ai/cezar/runs', `${runId}.ndjson`), '{"seq":1,"type":"note","message":"x"}\n');
+    }
+    return { path: wt.path, branch: wt.branch };
+  }
+
+  it('keeps the worktree and branch of a run the index lost but whose events are on disk', async () => {
+    const runId = '22222222-2222-4222-8222-222222222222';
+    const { path, branch } = await taskWorktree(runId, true);
+    writeFileSync(join(root, '.ai/cezar/runs.json'), '[{"id": "hand-edited",}]');
+
+    await new ProjectContexts({ listProjects: async () => [{ id: 'p', root, status: 'ok' }] }).context('p');
+
+    expect(existsSync(join(path, 'unsaved.txt'))).toBe(true);
+    expect(() => execFileSync('git', ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: root })).not.toThrow();
+  });
+
+  it('still sweeps a real orphan — no record and no event file', async () => {
+    const { path } = await taskWorktree('33333333-3333-4333-8333-333333333333', false);
+
+    await new ProjectContexts({ listProjects: async () => [{ id: 'p', root, status: 'ok' }] }).context('p');
+
+    expect(existsSync(path)).toBe(false);
   });
 });
