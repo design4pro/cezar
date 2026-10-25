@@ -1,5 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { realpathSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import type {
   AgentEvent,
@@ -45,6 +46,8 @@ export const SERVER_START_TIMEOUT_MS = 30_000;
 export const SERVER_START_MAX_MS = 180_000;
 /** How often the port cezar asked for is probed while waiting for the URL line. */
 export const SERVER_PROBE_INTERVAL_MS = 500;
+/** Spawns per session before a taken port is fatal (see `listen()`). */
+export const SERVER_PORT_ATTEMPTS = 3;
 
 /** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
 export const KILL_GRACE_MS = 4_000;
@@ -61,6 +64,18 @@ export const KILL_GRACE_MS = 4_000;
  * configurable agent-step wall clock (#880); that deadline is untouched.
  */
 export const TURN_IDLE_GRACE_MS = 5_000;
+
+/**
+ * A `session.status` retry scheduled further out than this ends the turn as an error. OpenCode
+ * retries a refused prompt silently on its own schedule — a spent free tier until the next day —
+ * and an interactive step has no wall clock, so four runs held their slots for 11 h. A duration,
+ * not a clock time: `next` is an epoch instant, so the resume it books is zone-independent.
+ */
+export const RETRY_GIVE_UP_MS = 10 * 60_000;
+
+/** `action.reason`s that mean a spent quota — OpenCode 1.19 sends `free_tier_limit` and
+ *  `account_rate_limit`. Any other action still fails the turn, but books no auto-resume. */
+const QUOTA_REASON_RE = /limit|quota/i;
 
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
@@ -108,19 +123,38 @@ export class OpencodeServerRunner implements AgentRunner {
   }
 }
 
+/** The server answered with a non-2xx status — an answer, unlike `OpencodeTransportError`. */
+class OpencodeStatusError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'OpencodeStatusError';
+  }
+}
+
+/** The installed `opencode serve` has no 1.x session route — in practice OpenCode 2.x. */
+export function unsupportedServerMessage(status: number): string {
+  return (
+    `this OpenCode server has no POST /session route (HTTP ${status}). ` +
+    'OpenCode 2.x replaced the server API cezar drives and is not supported yet — ' +
+    'install OpenCode 1.x (npm install -g opencode-ai@1) to run OpenCode tasks.'
+  );
+}
+
 /** One live `opencode serve` process driving a single session. */
 class OpencodeSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
 
-  private readonly child!: ChildProcessWithoutNullStreams;
+  private child!: ChildProcessWithoutNullStreams;
+  private serverPort!: number;
   /** "Has the server actually terminated?" — never `child.killed`, which only
    *  reports delivery and would disarm the escalation (#844/#858). */
-  private readonly hasExited: () => boolean;
+  private hasExited!: () => boolean;
+  private closed!: Promise<void>;
+  private stderrChunks: string[] = [];
   private serverOpen = true;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
   private ready!: Promise<void>;
-  private resolveExit!: () => void;
   private exited!: Promise<void>;
   private readonly sse = new AbortController();
   private readonly toolCalls: AgentToolCallRecord[] = [];
@@ -167,6 +201,8 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** Set once `giveUpOnLongRetry` has reported the failure — the held POST's hang-up is not news. */
+  private retryGaveUp = false;
   /** One teardown per session — see `terminate()`. */
   private signalled = false;
 
@@ -177,46 +213,8 @@ class OpencodeSession implements AgentSession {
     private readonly onEvent: ((event: AgentEvent) => void) | undefined,
     private readonly opts: SessionOptions,
   ) {
-    // Random high port; the bound URL is read back from the server's output or a `/path` probe.
-    const port = 40000 + Math.floor(Math.random() * 20000);
-    try {
-      const env = buildChildEnv({ backend: 'opencode', extraEnv: spec.env });
-      // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
-      // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
-      if (spec.mcpServers?.length) {
-        env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
-      }
-      const [file, argv] = disclaimedCommand(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
-      this.child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
-    } catch (err) {
-      throw wrapSpawnError(err, bin);
-    }
-    this.hasExited = trackChildExit(this.child);
-
-    this.child.on('error', (err: NodeJS.ErrnoException) => {
-      this.spawnFailed = wrapSpawnError(err, bin);
-    });
-
-    this.exited = new Promise<void>((resolve) => {
-      this.resolveExit = resolve;
-    });
-    // A server that is gone will never send `session.idle`, so the turn ends
-    // here rather than waiting for a signal that cannot arrive.
-    this.child.once('exit', () => {
-      this.finishTurn();
-      this.resolveExit();
-    });
-    this.child.once('close', () => {
-      this.finishTurn();
-      this.resolveExit();
-    });
-
-    const stderrChunks: string[] = [];
-    this.child.stderr.setEncoding('utf8');
-    this.child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
-
-    // The server prints its URL once listening (stdout or stderr), or answers on the requested port.
-    const urlReady = this.waitForServerUrl(port, stderrChunks);
+    this.spawnServer(randomServerPort());
+    const urlReady = this.listen();
 
     const limitMs = spec.timeoutMs ?? timeoutMs;
     let deadline: NodeJS.Timeout | undefined;
@@ -239,7 +237,7 @@ class OpencodeSession implements AgentSession {
         // Live for the whole session; the SSE loop runs until end()/interrupt.
         await this.exited;
       } catch (err) {
-        if (!this.timedOut) {
+        if (!this.timedOut && !this.retryGaveUp) {
           const message = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'error', message: `opencode: ${message}` });
         }
@@ -352,6 +350,82 @@ class OpencodeSession implements AgentSession {
 
   // ---- server lifecycle ---------------------------------------------------
 
+  /** Spawn `opencode serve` on `port` and make it the session's server. Every
+   *  handler closes over its own child, so a replaced one cannot end the session. */
+  private spawnServer(port: number): void {
+    let child: ChildProcessWithoutNullStreams;
+    try {
+      const env = buildChildEnv({ backend: 'opencode', extraEnv: this.spec.env });
+      // Private MCP servers (spec 2026-10-07-private-project-mcp): OpenCode loads
+      // OPENCODE_CONFIG_CONTENT after the project config, so these are added and win on a clash.
+      if (this.spec.mcpServers?.length) {
+        env.OPENCODE_CONFIG_CONTENT = opencodeConfigContent(this.spec.mcpServers, env.OPENCODE_CONFIG_CONTENT);
+      }
+      const [file, argv] = disclaimedCommand(this.bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], env);
+      child = nodeSpawn(file, argv, { cwd: this.spec.cwd, env });
+    } catch (err) {
+      throw wrapSpawnError(err, this.bin);
+    }
+    this.child = child;
+    this.serverPort = port;
+    this.hasExited = trackChildExit(child);
+
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      this.spawnFailed = wrapSpawnError(err, this.bin);
+    });
+
+    let resolveExit!: () => void;
+    this.exited = new Promise<void>((resolve) => {
+      resolveExit = resolve;
+    });
+    this.closed = new Promise<void>((resolve) => child.once('close', () => resolve()));
+    // A server that is gone will never send `session.idle`, so the turn ends
+    // here rather than waiting for a signal that cannot arrive.
+    const gone = () => {
+      this.finishTurn();
+      resolveExit();
+    };
+    child.once('exit', gone);
+    child.once('close', gone);
+
+    const stderrChunks: string[] = [];
+    this.stderrChunks = stderrChunks;
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
+  }
+
+  /**
+   * The server's base URL, respawning on a fresh port when the random one was
+   * already taken — it sits in the OS ephemeral range, and opencode 1.19 exits
+   * with a bare `ServeError` instead of picking another (release 0.16.1 CI).
+   */
+  private async listen(): Promise<string> {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await this.waitForServerUrl(this.serverPort);
+      } catch (err) {
+        const retry = attempt < SERVER_PORT_ATTEMPTS && this.hasExited() && (await this.lostPort());
+        if (!retry || !this.serverOpen) {
+          // Local transcript only: the stderr tail can name paths, so it stays
+          // out of the error message that telemetry groups on.
+          const tail = this.stderrChunks.join('').trim().slice(-800);
+          if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
+          throw err;
+        }
+        this.spawnServer(randomServerPort());
+      }
+    }
+  }
+
+  /** Did the server that just exited lose its port? Its stderr says so, or the
+   *  port still cannot be bound. */
+  private async lostPort(): Promise<boolean> {
+    // stderr can still be flushing at `exit`; `close` means it is all in.
+    await Promise.race([this.closed, new Promise((resolve) => setTimeout(resolve, 1_000).unref?.())]);
+    if (/EADDRINUSE|address already in use|ServeError/i.test(this.stderrChunks.join(''))) return true;
+    return portTaken(this.serverPort);
+  }
+
   /**
    * Resolve the server's base URL from whichever comes first: the URL line on
    * stdout or stderr, or the port cezar asked for answering `GET /path` with
@@ -359,7 +433,7 @@ class OpencodeSession implements AgentSession {
    * differently-worded start must not be). Fails only on exit, on
    * `SERVER_START_TIMEOUT_MS` of silence, or at `SERVER_START_MAX_MS`.
    */
-  private waitForServerUrl(port: number, stderrChunks: readonly string[]): Promise<string> {
+  private waitForServerUrl(port: number): Promise<string> {
     return new Promise((resolve, reject) => {
       const probeUrl = `http://127.0.0.1:${port}`;
       const ownDir = canonicalPath(this.spec.cwd ?? process.cwd());
@@ -369,10 +443,6 @@ class OpencodeSession implements AgentSession {
       const fail = (message: string) => {
         if (settled) return;
         cleanup();
-        // Local transcript only: the stderr tail can name paths, so it stays
-        // out of the error message that telemetry groups on.
-        const tail = stderrChunks.join('').trim().slice(-800);
-        if (tail) this.emit({ type: 'note', message: `opencode serve stderr: ${tail}` });
         reject(new Error(message));
       };
       const succeed = (url: string) => {
@@ -433,7 +503,17 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
+    let created: Record<string, unknown>;
+    try {
+      created = await this.http('POST', '/session', { title: 'cezar task' });
+    } catch (err) {
+      // OpenCode 2.x moved its whole server API under `/api` with new payloads
+      // and events, so its server refuses the 1.x route (telemetry dc1a91a6).
+      if (err instanceof OpencodeStatusError && (err.status === 404 || err.status === 405)) {
+        throw new Error(unsupportedServerMessage(err.status));
+      }
+      throw err;
+    }
     this.sessionId = stringField(created, 'id');
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     this.emit({ type: 'session', sessionId: this.sessionId });
@@ -630,7 +710,27 @@ class OpencodeSession implements AgentSession {
       // own scope, exactly as the v2 mapper reads it.
       const sid = stringField(props, 'sessionID');
       if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
+    } else if (type === 'session.status') {
+      const sid = stringField(props, 'sessionID');
+      if (sid === undefined || sid === this.sessionId) this.giveUpOnLongRetry(props.status);
     }
+  }
+
+  /** Fail the turn on a retry that needs a human (`action`) or waits past `RETRY_GIVE_UP_MS`.
+   *  A quota `action` is worded as a usage limit and books the auto-resume; any other action never
+   *  does (resuming meets the same refusal). A long backoff without one auto-resumes only when
+   *  OpenCode's own text names a limit, else it waits for a manual Continue. */
+  private giveUpOnLongRetry(status: unknown): void {
+    if (!isRecord(status) || status.type !== 'retry' || !this.serverOpen) return;
+    const next = typeof status.next === 'number' && Number.isFinite(status.next) ? status.next : undefined;
+    const action = isRecord(status.action) ? status.action : undefined;
+    if (!action && (next === undefined || next - Date.now() < RETRY_GIVE_UP_MS)) return;
+    const quota = QUOTA_REASON_RE.test(action ? stringField(action, 'reason') ?? '' : '');
+    const reason = stringField(status, 'message') ?? 'the provider refused the request';
+    const at = next === undefined ? '' : ` — ${action && !quota ? 'next attempt' : 'retry at'} ${new Date(next).toISOString()}`;
+    this.retryGaveUp = true;
+    this.emit({ type: 'error', message: `opencode: ${quota ? 'usage limit reached: ' : ''}${reason}${at}` });
+    this.interrupt();
   }
 
   /** An unanswered prompt parks `opencode serve` forever — c3d30076 sat 21 h on
@@ -739,7 +839,7 @@ class OpencodeSession implements AgentSession {
     if (!this.baseUrl) throw new Error('opencode server not ready');
     const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
+      throw new OpencodeStatusError(res.status, `${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
     }
     if (!res.body) return {};
     try {
@@ -812,6 +912,21 @@ export function opencodePermissionReply(
     return 'once';
   }
   return 'reject';
+}
+
+/** Random high port, clear of opencode's own 4096 (#1179); the bound URL is read back from
+ *  the server's output or a `/path` probe. */
+function randomServerPort(): number {
+  return 40000 + Math.floor(Math.random() * 20000);
+}
+
+/** Is `port` held on loopback right now — the bind the server itself attempts? */
+function portTaken(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const probe = createServer();
+    probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code === 'EADDRINUSE'));
+    probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(false)));
+  });
 }
 
 /** `realpath` of the deepest existing ancestor, rest re-appended — the file a

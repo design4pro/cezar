@@ -79,6 +79,21 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
+
+  it('surfaces a turn/completed whose status is failed as an AgentEvent error', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const events: AgentEvent[] = [];
+    const session = runner.startSession(
+      { userPrompt: 'mock:turn-completed-failed', cwd: process.cwd() },
+      (event) => events.push(event),
+      { autoEndAfterFirstTurn: true },
+    );
+
+    await session.result;
+
+    expect(events).toContainEqual({ type: 'error', message: "The 'fable' model is not supported" });
+    expect(events).toContainEqual({ type: 'turn-end' });
+  }, 15_000);
 });
 
 /** Telemetry 4c9de01a: Continue resumed a thread a still-live app-server held the writer lock for. */
@@ -492,7 +507,7 @@ describe('a backend failure the app-server reports on turn/completed', () => {
     // string is what the cockpit shows as the reason the run failed.
     expect(events).toContainEqual({
       type: 'error',
-      message: "The 'opus' model is not supported when using Codex with a ChatGPT account.",
+      message: "400 invalid_request_error: The 'opus' model is not supported when using Codex with a ChatGPT account.",
     });
     // One error, not one per signal: the `error` notification and the failed turn carry the
     // same message, and a duplicate would read as two separate failures in the run log.
