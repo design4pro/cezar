@@ -30,11 +30,13 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnError,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
 } from './codex-ui-mapper.ts';
+import { unwrapJsonErrorEnvelope } from './agent-errors.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -652,16 +654,11 @@ class CodexSession implements AgentSession {
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
         // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = !failed && this.compactionEndedTurn;
+        const turnError = codexTurnError(method, params);
+        const compacted = turnError === undefined && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        // A refused request settles as `turn/completed` whose TURN reports `status: 'failed'`
-        // — the method alone is not the verdict. Reading only `turn/failed` let an API
-        // rejection (a model the account cannot use) reach the run as an ordinary end of turn:
-        // no error, no text, no tokens, and a session parked as if the agent were waiting.
-        if (failed && !this.terminatedByCezar) {
-          this.reportBackendError(
-            errorMessageOf(params.error) ?? errorMessageOf(turn.error) ?? 'codex turn failed',
-          );
+        if (turnError !== undefined && !this.terminatedByCezar) {
+          this.reportBackendError(turnError);
         }
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
@@ -817,17 +814,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  */
 function errorMessageOf(error: unknown): string | undefined {
   const raw = typeof error === 'string' ? error.trim() || undefined : stringField(asRecord(error), 'message');
-  return raw === undefined ? undefined : unwrapSerializedError(raw);
-}
-
-function unwrapSerializedError(raw: string): string {
-  if (!raw.startsWith('{')) return raw;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    return stringField(asRecord(asRecord(parsed).error), 'message') ?? raw;
-  } catch {
-    return raw;
-  }
+  return raw === undefined ? undefined : unwrapJsonErrorEnvelope(raw);
 }
 
 function stringField(obj: Record<string, unknown>, key: string): string | undefined {

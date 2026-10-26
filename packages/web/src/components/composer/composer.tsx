@@ -144,6 +144,15 @@ export interface ComposerHandle {
 
 const QUICK_REPLIES: Record<string, string> = { KeyA: 'Yes, approved.', KeyC: 'Continue.' }
 
+/** Every scrolled ancestor with its scrollTop, so the autosize pass can put them back. */
+function scrollAncestors(el: HTMLElement): Array<[Element, number]> {
+  const out: Array<[Element, number]> = []
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    if (node.scrollTop > 0) out.push([node, node.scrollTop])
+  }
+  return out
+}
+
 export function Composer({
   onSubmit,
   value,
@@ -337,8 +346,12 @@ export function Composer({
   useLayoutEffect(() => {
     const el = textareaRef.current
     if (!el) return
+    // The `auto` pass collapses the box for a moment; inside the task's sticky dock that shrinks
+    // the shared scroller, which clamps its scrollTop and jumps the thread on every keystroke.
+    const scrolled = scrollAncestors(el)
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    for (const [node, top] of scrolled) if (node.scrollTop !== top) node.scrollTop = top
   }, [text])
 
   // ---- attachments ---------------------------------------------------------------------------
@@ -351,7 +364,8 @@ export function Composer({
       // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
       const intake = screenFiles(files, imagesRef.current.length, attachedImageBytes(imagesRef.current))
-      for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
+      // A size or count limit the user can act on, not a failure (telemetry eab86832, 08cc6528).
+      for (const reason of intake.rejected) toast(reason, { tone: 'danger', expected: true })
       for (const file of intake.accepted) {
         void fileToPendingAttachment(file, source).then((attachment) => {
           const next = appendAttachment(imagesRef.current, attachment)
@@ -359,6 +373,14 @@ export function Composer({
           // Upload now, while the user is still typing, so the send only names it (7054e5f2).
           void stageAttachment(attachment)
           setImages(next)
+        }, (error: unknown) => {
+          // A dropped folder, or a file gone before it was read, rejects `arrayBuffer()` with
+          // NotFoundError (WebKit: "The object can not be found here.", telemetry 159014d3).
+          const gone = error instanceof DOMException && error.name === 'NotFoundError'
+          toast(`“${file.name}” could not be read${gone ? ' — a folder, or a file that no longer exists' : ''}`, {
+            tone: 'danger',
+            expected: gone,
+          })
         })
       }
     },
