@@ -17,6 +17,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { toast } from '@/components/ui/toaster'
+import { formatChord } from '@/lib/keybindings'
+import { trackDesignModeEnabled } from '@/lib/telemetry'
 import { cn } from '@/lib/utils'
 
 import {
@@ -39,7 +41,8 @@ import { parseDesignPick, type NewDesignPick } from './design-picks'
  *  - A page that refuses to be framed (`X-Frame-Options`, `frame-ancestors`) fires `load` for the
  *    refusal too. The timeout below is the only signal available, and its message says so.
  *  - On a HOSTED cockpit a loopback address means the VIEWER's machine, not the host the task
- *    runs on, so it is never framed there — the case is refused with the reason.
+ *    runs on, so it is not framed until the user forwards the port with SSH — the refusal shows
+ *    the exact `ssh -L` command and frames the address once they say the tunnel is open.
  */
 
 /** How long a page gets to fire `load` before the view calls it a failure. Generous: a cold dev
@@ -61,6 +64,7 @@ export function BrowserView({
   designMarks,
   renderDesignNote,
   onDesignEscape,
+  designTray,
   renderEmpty,
 }: {
   state: BrowserState
@@ -88,6 +92,9 @@ export function BrowserView({
   /** Esc was pressed in the page while the note for `mark` was open. The view closes the popup;
    *  the host decides what else that means (a draft is discarded). */
   onDesignEscape?: (mark: string) => void
+  /** The host's batch send for its notes, floated in the frame's corner while Design Mode is on;
+   *  `null` when there is nothing to send. */
+  designTray?: React.ReactNode
   /** What an empty tab shows instead of the bare hint — the task's "Run the app". Handed the
    *  same `open` the address bar uses. Only on a cockpit that can frame a local address. */
   renderEmpty?: (open: (url: string) => void) => React.ReactNode
@@ -171,7 +178,10 @@ export function BrowserView({
   // A loopback address this cockpit cannot honestly show: on a hosted cockpit it would open on
   // the viewer's machine. `localHandoff` is the server's own "this cockpit is local" answer.
   const canPreview = health.data?.capabilities?.localHandoff ?? true
-  const refused = target !== '' && !canPreview && isLoopback(target)
+  /** Origins the user forwarded to their own machine with `ssh -L`, so `localhost` there IS the
+   *  task's host. Session-only: a tunnel does not outlive the shell that opened it. */
+  const [tunneled, setTunneled] = useState<ReadonlySet<string>>(() => new Set())
+  const refused = target !== '' && !canPreview && isLoopback(target) && !tunneled.has(originOf(target) ?? '')
 
   /**
    * Design Mode.
@@ -203,6 +213,28 @@ export function BrowserView({
     : null
   const targetOrigin = designOrigin(target)
   const designActive = designAllowed && design && targetOrigin !== null
+  // ⌥D / Alt+D switches it — from any field too, so it works wherever the focus is in the cockpit.
+  // Inside the page only the mirror's picker can hear it (and forwards it): a directly framed
+  // page is another origin, whose keys never reach this window.
+  const toggleDesign = useRef<() => boolean>(() => false)
+  toggleDesign.current = () => {
+    if (!designAllowed || targetOrigin === null) return false
+    if (!design) trackDesignModeEnabled('shortcut')
+    setDesign((on) => !on)
+    return true
+  }
+  useEffect(() => {
+    if (!designOffered) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.repeat || event.defaultPrevented || !isDesignKey(event)) return
+      // A dialog owns the keyboard (Radix sets no `aria-modal`); the note popup does not.
+      if (document.querySelector('[role="dialog"]:not([data-slot="browser-design-note"]), [role="alertdialog"]')) return
+      // Swallowed only when it switched something: unavailable, ⌥D still types its `∂`.
+      if (toggleDesign.current()) event.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [designOffered])
   const mirror = proxy !== null && proxy.upstream === targetOrigin ? proxy.origin : null
   // Asked for but not answered yet: nothing is framed, so the page is not loaded directly only to
   // be loaded again a moment later through the mirror.
@@ -344,6 +376,9 @@ export function BrowserView({
       } | null
       if (data === null || typeof data !== 'object' || data.source !== 'cezar-design') return
       if (data.type === 'ready') setPickerReady(true)
+      // Only ever OFF from the page: its own script could post this too, and switching Design
+      // Mode on takes the user's own action (spec §7a).
+      else if (data.type === 'toggle') setDesign(false)
       else if (data.type === 'cancel') {
         // Esc in the page: with a note open it closes that note (the host discards a draft);
         // with none it leaves Design Mode.
@@ -667,14 +702,24 @@ export function BrowserView({
             disabled={designUnavailable !== null || targetOrigin === null}
             title={
               designUnavailable ?? (targetOrigin === null ? 'Design Mode works on local http:// addresses'
-              : designActive ? 'Stop selecting elements (Esc)'
-              : 'Click an element of the page to send it to the agent')
+              : designActive ? `Stop selecting elements (${formatChord(DESIGN_CHORD)} or Esc)`
+              : `Click an element of the page to send it to the agent (${formatChord(DESIGN_CHORD)})`)
             }
-            onClick={() => setDesign((on) => !on)}
+            onClick={() => {
+              if (!design) trackDesignModeEnabled('button')
+              setDesign((on) => !on)
+            }}
             className="ml-1 disabled:opacity-40"
           >
             <MousePointerClickIcon aria-hidden="true" className="size-3.5" />
             Design Mode
+            <kbd
+              data-slot="browser-design-key"
+              aria-hidden="true"
+              className="ml-0.5 rounded border border-current/25 px-1 font-sans text-[10px] leading-4 opacity-70"
+            >
+              {formatChord(DESIGN_CHORD)}
+            </kbd>
           </Button>
         ) : null}
       </div>
@@ -686,9 +731,17 @@ export function BrowserView({
             tone="neutral"
             heading="h2"
             title="This address points at the machine you are sitting at"
-            subtitle="This cockpit runs remotely, so a local address would open on your computer rather than on the task's host. Open the cockpit on the task's machine to preview its app."
-          />
-        ) : target === '' && renderEmpty && canPreview ? (
+            subtitle="This cockpit runs remotely, so a local address opens on your computer rather than on the task's host. Forward the port from your computer first:"
+          >
+            <TunnelHint
+              url={target}
+              onTunneled={() => {
+                const origin = originOf(target)
+                if (origin) setTunneled((prev) => new Set(prev).add(origin))
+              }}
+            />
+          </CenteredState>
+        ) : target === '' && renderEmpty ? (
           renderEmpty(commit)
         ) : target === '' ? (
           <CenteredState
@@ -696,7 +749,11 @@ export function BrowserView({
             tone="neutral"
             heading="h2"
             title="Empty tab"
-            subtitle="Enter the address of the task's app, e.g. http://localhost:3000 — then switch on Design Mode to point at an element and tell the agent what to change."
+            subtitle={
+              canPreview
+                ? "Enter the address of the task's app, e.g. http://localhost:3000 — then switch on Design Mode to point at an element and tell the agent what to change."
+                : "Enter the address of the task's app, e.g. http://localhost:3000. This cockpit runs remotely: start the app in the task's terminal (on a hosted cockpit it needs CEZ_TERMINAL=1), and cezar shows the SSH command that forwards its port to you."
+            }
           />
         ) : (
           <>
@@ -729,7 +786,10 @@ export function BrowserView({
                 ))}
               </div>
             ) : null}
-            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 ? (
+            {designAllowed && designTray ? (
+              <div className="absolute right-3 bottom-3 z-10">{designTray}</div>
+            ) : null}
+            {designActive && status === 'idle' && !noteVisible && adrift.length === 0 && !designTray ? (
               <p
                 data-slot="browser-design-hint"
                 className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-background/95 px-3 py-1 text-xs whitespace-nowrap text-soft-foreground shadow-sm"
@@ -785,6 +845,14 @@ export function BrowserView({
       </div>
     </div>
   )
+}
+
+const DESIGN_CHORD = 'Alt+D'
+
+/** ⌥D / Alt+D, by the physical key: on a Mac ⌥D reports `∂`. Ctrl+Alt is AltGr off a Mac — typing. */
+function isDesignKey(event: Pick<KeyboardEvent, 'code' | 'key' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>): boolean {
+  const d = event.code ? event.code === 'KeyD' : event.key === 'd' || event.key === 'D'
+  return d && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey
 }
 
 function ToolbarButton({
@@ -988,6 +1056,56 @@ export function pageAddress(reported: string, frameOrigin: string, appOrigin: st
   if (parsed.origin !== frameOrigin) return null
   const path = parsed.pathname + parsed.search + parsed.hash
   return normalizeAddress((appOrigin ?? frameOrigin) + path)
+}
+
+/**
+ * The `ssh -L` command that forwards a loopback address of the cockpit's host to the same port on
+ * the viewer's machine. The host is the one the cockpit is served from — the usual case of a VPS
+ * behind a reverse proxy; one reached otherwise is the user's to substitute.
+ */
+export function tunnelCommand(url: string, sshHost: string): string | null {
+  try {
+    const parsed = new URL(url)
+    const port = parsed.port || (parsed.protocol === 'https:' ? '443' : '80')
+    return `ssh -N -L ${port}:localhost:${port} ${sshHost || '<host>'}`
+  } catch {
+    return null
+  }
+}
+
+function TunnelHint({ url, onTunneled }: { url: string; onTunneled: () => void }) {
+  const command = tunnelCommand(url, window.location.hostname)
+  if (!command) return null
+  return (
+    <div data-slot="browser-tunnel" className="flex w-full flex-col items-center gap-3">
+      <code className="w-full rounded-md border border-border bg-muted px-3 py-2 font-mono text-xs break-all text-foreground select-all">
+        {command}
+      </code>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            void navigator.clipboard?.writeText(command).then(
+              () => toast('Copied the SSH command.'),
+              () => toast('Could not copy — select the command instead.', { tone: 'danger' }),
+            )
+          }}
+        >
+          Copy command
+        </Button>
+        <Button type="button" size="sm" data-action="browser-tunnel-open" onClick={onTunneled}>
+          The tunnel is open — show it here
+        </Button>
+        <Button type="button" variant="ghost" size="sm" asChild>
+          <a href={url} target="_blank" rel="noreferrer">
+            Open in a new tab
+          </a>
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 export function isLoopback(url: string): boolean {

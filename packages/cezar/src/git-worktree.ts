@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
+import { diskFloorRefusal } from './disk-space.ts';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 import { resolveTaskRemotes, splitRemoteRef, type TaskRemotes } from './git-remotes.ts';
@@ -219,6 +220,12 @@ export async function chooseForkBase(
   return resolved;
 }
 
+/** Does the local branch exist? False on any git failure (never throws). */
+export async function localBranchExists(repoRoot: string, branch: string): Promise<boolean> {
+  if (!isSafeGitRef(branch)) return false;
+  return (await git(repoRoot, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])).ok;
+}
+
 export function worktreePathFor(repoRoot: string, runId: string): string {
   return join(repoRoot, WORKTREES_DIR, runId);
 }
@@ -280,6 +287,13 @@ function canonicalPath(path: string): string {
   } catch {
     return resolve(path);
   }
+}
+
+/** A checkout (and its lifecycle install) on a near-full disk dies half-written with ENOSPC —
+ *  refuse up front with the same reclaim hint the agent spawn guard gives (9cdcedc3). */
+function refuseBelowDiskFloor(worktreePath: string): void {
+  const refusal = diskFloorRefusal('worktree', worktreePath);
+  if (refusal) throw new Error(refusal);
 }
 
 /**
@@ -377,6 +391,7 @@ export async function createWorktreeWithOutcome(
       }
       return {...worktreeInfo(byBranch.path, branch, base), materialized: false};
     }
+    refuseBelowDiskFloor(absolutePath);
     const attach = await git(repoRoot, ['worktree', 'add', absolutePath, branch]);
     if (!attach.ok) {
       throw new Error(`git worktree reattach failed: ${attach.stderr.trim() || attach.stdout.trim()}`);
@@ -384,6 +399,7 @@ export async function createWorktreeWithOutcome(
     return {...worktreeInfo(absolutePath, branch, base), materialized: true};
   }
 
+  refuseBelowDiskFloor(absolutePath);
   // Two runs forking at once race on the shared .git/config: `worktree add -b` writes the new
   // branch's tracking keys there, and git's config lock does not retry. The branch exists by
   // then, so the retry reattaches it, which writes no shared config. Not matched on the error

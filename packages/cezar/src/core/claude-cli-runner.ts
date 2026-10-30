@@ -1,3 +1,4 @@
+import { emitUsageWindows, normalizeClaudeTerminalUsageLimit, normalizeClaudeUsageWindows } from './usage-windows.ts';
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -23,6 +24,7 @@ import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import { armInactivityDeadline, inactivityTimeoutMessage } from './inactivity-deadline.ts';
 import { claudeMcpAllowRules, toClaudeMcpConfig, type PrivateMcpServer } from './private-mcp.ts';
 import {
   claudeTurnStarted,
@@ -33,7 +35,7 @@ import {
   type ClaudeUiMapping,
 } from './claude-ui-mapper.ts';
 
-/** Default wall-clock cap for a single run before SIGTERM → SIGKILL.
+/** Default inactivity cap (no stream frame for this long) before SIGTERM → SIGKILL (cf2191f1).
  *  Interactive sessions pass `timeoutMs: 0` to disable it entirely. */
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60_000;
 /** Grace period between SIGTERM and SIGKILL when a timeout fires. */
@@ -62,7 +64,7 @@ export function appendClaudeSystemPrompt(systemPrompt?: string): string {
 export interface ClaudeCliRunnerOptions {
   /** Override the binary name/path; defaults to `claude` on PATH. */
   bin?: string;
-  /** Wall-clock timeout for a run (ms); per-spec `timeoutMs` still wins. */
+  /** Inactivity timeout for a run (ms); per-spec `timeoutMs` still wins. */
   timeoutMs?: number;
 }
 
@@ -189,7 +191,7 @@ export class ClaudeCliRunner implements AgentRunner {
     };
 
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
-    // wall-clock kill switch. claude installs its own SIGTERM handler and exits
+    // inactivity kill switch. claude installs its own SIGTERM handler and exits
     // 143 instead of dying from the signal, so without this flag our own
     // teardown reads as an agent failure (#703).
     let terminatedByCezar = false;
@@ -258,29 +260,26 @@ export class ClaudeCliRunner implements AgentRunner {
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => stderrChunks.push(chunk));
 
-    // Optional wall-clock kill switch (disabled for interactive sessions).
+    // Optional inactivity kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
     let permissionDenied = false;
     let killTimer: NodeJS.Timeout | undefined;
-    let deadline: NodeJS.Timeout | undefined;
-    if (limitMs > 0) {
-      deadline = setTimeout(() => {
-        timedOut = true;
-        interrupt();
-        child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!hasExited()) signalChild('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
-      }, limitMs);
-      deadline.unref?.();
-    }
+    const deadline = armInactivityDeadline(limitMs, () => {
+      timedOut = true;
+      interrupt();
+      child.stdout.destroy();
+      killTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, KILL_GRACE_MS);
+      killTimer.unref?.();
+    });
 
     const result = (async (): Promise<AgentRunResult> => {
       try {
         for await (const line of readNdjson(child.stdout)) {
           if (timedOut || permissionDenied) break;
+          deadline.touch();
           let msg: ClaudeStreamMessage;
           try {
             msg = JSON.parse(line) as ClaudeStreamMessage;
@@ -288,6 +287,8 @@ export class ClaudeCliRunner implements AgentRunner {
             onEvent?.({ type: 'note', message: `claude: skipped unparseable stream line: ${truncate(line)}` });
             continue;
           }
+
+          emitUsageWindows(spec.onUsageWindows, normalizeClaudeUsageWindows(msg) ?? normalizeClaudeTerminalUsageLimit(msg));
 
           // Claude reports `error_during_execution` while reacting to our
           // teardown signal. Once cezar has signalled the child, that frame
@@ -342,7 +343,7 @@ export class ClaudeCliRunner implements AgentRunner {
         // error — expected; rethrow anything else.
         if (!timedOut) throw err;
       } finally {
-        if (deadline) clearTimeout(deadline);
+        deadline.clear();
         if (killTimer) clearTimeout(killTimer);
         if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
@@ -360,8 +361,7 @@ export class ClaudeCliRunner implements AgentRunner {
       const text = textChunks.join('\n').trim();
 
       if (timedOut) {
-        const mins = Math.round((limitMs / 60_000) * 10) / 10;
-        onEvent?.({ type: 'error', message: `claude CLI timed out after ${mins}m and was killed` });
+        onEvent?.({ type: 'error', message: inactivityTimeoutMessage('claude CLI', limitMs, deadline.expiredBy) });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }

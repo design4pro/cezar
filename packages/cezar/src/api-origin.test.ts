@@ -38,7 +38,7 @@ describe('cockpit API origin', () => {
 
   it('keeps startup wired to the configured host', () => {
     const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8');
-    expect(source).toContain('pickPort(preferredPort, bindHost)');
+    expect(source).toContain("pickStartupPort(preferredPort, process.env.CEZ_REMOTE === '1', bindHost)");
     expect(source).toContain('apiOrigin(bindHost, port)');
   });
 });

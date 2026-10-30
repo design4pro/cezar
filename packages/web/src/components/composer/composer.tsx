@@ -88,10 +88,15 @@ export interface ComposerProps {
   draftItems?: ReactNode
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
   footerStart?: ReactNode
-  /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
+  /** Rendered between Dictation and the send button — the /new schedule summary and status. */
   footerEnd?: ReactNode
   /** The send button's accessible name. */
   sendAriaLabel?: string
+  sendLabel?: string
+  /** Joined to the send button's right edge as a split button — the /new start-time menu. */
+  sendMenu?: ReactNode
+  /** The key that sends (plain Enter, `isSubmitShortcut`), shown in the send button's tooltip. */
+  sendShortcut?: string
   /**
    * While the host's work is running, a Stop button sits where send does. With an empty box it is
    * the only button (an empty box over a working agent offers to stop it); once there is something
@@ -99,6 +104,8 @@ export interface ComposerProps {
    */
   stop?: { label: string; onStop: () => void; pending?: boolean }
   disabled?: boolean
+  /** Disable submission only, keeping the draft and footer controls interactive. */
+  submitDisabled?: boolean
   /** Shown as the placeholder while disabled — e.g. the legacy "Session closed — Continue to
    *  reopen." */
   disabledReason?: string
@@ -164,8 +171,12 @@ export function Composer({
   footerStart,
   footerEnd,
   sendAriaLabel = 'Send',
+  sendLabel,
+  sendMenu,
+  sendShortcut,
   stop,
   disabled = false,
+  submitDisabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
   placeholder = 'Reply — / for skills, @ for files…',
@@ -417,7 +428,7 @@ export function Composer({
       meta?: ComposerSubmitMeta,
     ) => {
       const body = messageText.trim()
-      if (disabled || busy) return
+      if (disabled || submitDisabled || busy) return
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
@@ -448,10 +459,11 @@ export function Composer({
         setBusy(false)
       }
     },
-    [allowEmptySubmit, busy, disabled, onSubmit],
+    [allowEmptySubmit, busy, disabled, submitDisabled, onSubmit],
   )
 
   const submitDraft = useCallback(() => {
+    if (disabled || submitDisabled || busy) return
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
@@ -461,7 +473,7 @@ export function Composer({
     setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
-  }, [allowEmptySubmit, images, send, text])
+  }, [allowEmptySubmit, busy, disabled, submitDisabled, images, send, text])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -554,6 +566,34 @@ export function Composer({
   }
 
   const recording = dictation.recording
+  const sendDisabled =
+    disabled || submitDisabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+  const sendButtonElement = (
+    <Button
+      type="button"
+      size={sendLabel ? "sm" : "icon-sm"}
+      aria-label={sendAriaLabel}
+      disabled={sendDisabled}
+      className={cn(sendLabel ? "h-8" : "size-8", sendMenu && "rounded-r-none")}
+      onClick={submitDraft}
+    >
+      <ArrowUpIcon aria-hidden="true" />{sendLabel}
+    </Button>
+  )
+  // The chord goes in the tooltip, not on the button — the way GitHub and Linear show it.
+  const sendButton = sendShortcut ? (
+    <IconTooltip
+      side="top"
+      label={
+        <span data-slot="composer-send-shortcut" className="flex items-center gap-2">
+          {sendLabel ?? sendAriaLabel}
+          <kbd className="font-sans opacity-70">{sendShortcut}</kbd>
+        </span>
+      }
+    >
+      {sendButtonElement}
+    </IconTooltip>
+  ) : sendButtonElement
 
   return (
     <Popover open={menuOpen} onOpenChange={(open) => (open ? undefined : closeMenu())}>
@@ -708,18 +748,17 @@ export function Composer({
                 {/* With Stop showing, Send appears only once there is something to send: an empty box
                     over a working agent offers exactly one action. */}
                 {!stop || text.trim() !== '' || images.length > 0 || allowEmptySubmit ? (
-                  <Button
-                    type="button"
-                    size="icon-sm"
-                    aria-label={sendAriaLabel}
-                    disabled={
-                      disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
-                    }
-                    className="size-8"
-                    onClick={submitDraft}
-                  >
-                    <ArrowUpIcon aria-hidden="true" />
-                  </Button>
+                  sendMenu ? (
+                    // Its own pixel-snapped layer: the row often sits at a fractional y, and Chrome
+                    // left a stale 1px strip of the previous button when the group changed shape.
+                    <div data-slot="composer-send" className="flex transform-gpu items-center">
+                      {sendButton}
+                      {/* Stays usable while Send is disabled, but dimmed to match it. */}
+                      <div data-slot="composer-send-menu" className={cn("flex", sendDisabled && "opacity-50 hover:opacity-100 focus-within:opacity-100")}>
+                        {sendMenu}
+                      </div>
+                    </div>
+                  ) : sendButton
                 ) : null}
               </div>
             </div>

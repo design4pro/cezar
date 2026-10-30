@@ -85,6 +85,7 @@ let turn = 0;
 // rather than time out.
 let autonomousArmed = false;
 let askRepeat = false;
+let monitoringSticky = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -151,12 +152,18 @@ async function respond(userText, imageCount) {
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
   if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
+  // CEZ:MONITORING: the watcher whose downstream work never finishes.
+  if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
-  const doneMarker =
-    userText.includes('mock:done') ||
-    userText.includes('## Tree inbox') ||
-    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+  // `mock:done-refs` → CEZ:DONE with a task-reference line AFTER it, the order an agent that
+  // declares its PR last really emits.
+  const doneMarker = userText.includes('mock:done-refs')
+    ? '\n\nCEZ:DONE\nCEZ:PR=4243'
+    : userText.includes('mock:done') ||
+        userText.includes('## Tree inbox') ||
+        (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
   // `mock:denied` → the turn's result frame reports a permission denial (the shape
@@ -170,7 +177,7 @@ async function respond(userText, imageCount) {
   // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
   // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
   // bury the marker and park the run as `waiting` ("needs you").
-  const monitoringMarker = userText.includes('mock:monitoring')
+  const monitoringMarker = monitoringSticky || userText.includes('mock:monitoring')
     ? userText.includes('mock:monitoring-refs')
       ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
       : '\n\nCEZ:MONITORING'
@@ -284,23 +291,26 @@ async function respond(userText, imageCount) {
     return;
   }
 
-  // `mock:auth-refresh` → the transient refresh-lock failure Claude Code 2.1.285 reported on
-  // 2026-10-02, on every attempt. `mock:auth-refresh-once` fails only the first session started in
-  // this cwd (a marker file remembers it), so the engine's one retry can be seen to succeed.
   const refreshOnceMarker = '.mock-auth-refresh-failed';
   const refreshOnce = userText.includes('mock:auth-refresh-once');
-  if (
-    userText.includes('mock:auth-refresh') &&
-    !(refreshOnce && existsSync(refreshOnceMarker))
-  ) {
-    if (refreshOnce) writeFileSync(refreshOnceMarker, '');
+  if (userText.includes('mock:auth-refresh') && (!refreshOnce || !existsSync(refreshOnceMarker))) {
+    if (refreshOnce) writeFileSync(refreshOnceMarker, '1');
+    emit({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      result: 'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again' });
+    return;
+  }
+  // `mock:overloaded` / `mock:credit` → a transient provider failure (76aa46a9) and an account
+  // state one (7d0a1d6d), in the same `is_error` result envelope (core/agent-failure-class.ts).
+  const accountOrProviderError = userText.includes('mock:overloaded')
+    ? 'API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.'
+    : userText.includes('mock:credit') ? 'Credit balance is too low'
+    : userText.includes('mock:enospc') ? 'ENOSPC: no space left on device, write' : undefined;
+  if (accountOrProviderError) {
     emit({
       type: 'result',
       subtype: 'success',
       is_error: true,
-      result:
-        'Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. ' +
-        'This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again',
+      result: accountOrProviderError,
       usage: { input_tokens: 0, output_tokens: 0 },
       total_cost_usd: 0,
     });

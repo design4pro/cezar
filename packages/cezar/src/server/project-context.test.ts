@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { RunManager } from '../workflows/run.ts';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -210,6 +211,16 @@ describe('ProjectContexts', () => {
     expect(spyA).not.toHaveBeenCalled();
     expect(spyB).not.toHaveBeenCalled();
   });
+  it('awaits optional context preparation before manager recovery and announces readiness afterwards', async () => {
+    const contexts = makeContexts([{ id: 'a', root: rootA, status: 'not-git' }]);
+    const order: string[] = [];
+    const off = contexts.onBeforeRecover(async () => { await Promise.resolve(); order.push('prepared'); });
+    const recovered = vi.spyOn(RunManager.prototype, 'recover').mockImplementation(async () => { order.push('recover'); });
+    contexts.onContextBuilt(() => { order.push('ready'); });
+    try { await contexts.context('a'); expect(order).toEqual(['prepared', 'recover', 'ready']); }
+    finally { off(); contexts.disposeAll(); recovered.mockRestore(); }
+  });
+
 });
 
 /** The startup orphan sweep deleted every task's worktree and branch whenever runs.json could
