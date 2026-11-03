@@ -284,13 +284,13 @@ const zoneParts = new Intl.DateTimeFormat("en-CA", {
   hourCycle: "h23",
 });
 
-/** The Warsaw calendar date and hour of an instant, whatever zone the host runs in (cron: UTC). */
+/** The UTC calendar date and hour, independent of the host's local zone. */
 export function utcClock(now) {
   const parts = Object.fromEntries(zoneParts.formatToParts(now).map((p) => [p.type, p.value]));
   return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
 
-/** The first tick at or after 07:00 Warsaw on a day that has not had its digest. */
+/** The first tick at or after 07:00 UTC on a day that has not had its digest. */
 export function digestDue(now, lastDigestDate) {
   const { date, hour } = utcClock(now);
   return hour >= DIGEST_HOUR && lastDigestDate !== date;
