@@ -29,3 +29,11 @@ The engine does not change. Everything the reconciler needs is already a route (
 - A repo adopts it by adding `--plan` to its `backlog-status.mjs` and a `--project` to the cron line. Until then it only gets repair, retried receipts and the digest. When a repo adopts it, the repo's own scheduled "implement the next ready issue" automation (ADR 0008, decision 2) becomes a second starter of the same work: it has to be disabled in the same change, or two runs can take one issue.
 - The digest and the escalation write to GitHub as the host's `gh` login, so they appear under that account. `GH_CONFIG_DIR` on the cron line selects another login.
 - The usage-limit pause is global by design: one parked account stops every project's unattended work, including a project whose runs use another account. That is the cheap failure; counting a window per account would need the agent-profile resolution the engine owns.
+
+## Amendment: 2026-11-03
+
+The pipeline-hardening plan replaces the global usage pause with runner isolation: an unavailable
+Claude account does not stop healthy Codex work. Retry budgets also survive a new run ID for the
+same project/workflow/target/error. The digest uses UTC, and opted-in project closure runs every
+tick. Unknown run inventory prevents launching against unknown capacity. This supersedes the
+global-pause and Warsaw-time decisions above; activation requires an effective host schedule audit.

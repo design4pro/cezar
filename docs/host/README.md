@@ -284,7 +284,7 @@ node host/reconciler/reconcile.mjs --project <id>=<path> [--project ...] [--dry-
 ### Installing it
 
 Under `flock`, so a slow tick never overlaps the next. The cron needs no `CRON_TZ` and no
-Warsaw-hour guard like the housekeeping lines: the digest does its own Europe/Warsaw arithmetic.
+host-local clock guard: the digest uses UTC. Verify the effective crontab before replacing legacy jobs.
 
 ```cron
 */10 * * * * mkdir -p $HOME/.cache/cez && flock -n $HOME/.cache/cez/reconcile.lock node /home/ubuntu/dev/cezar/host/reconciler/reconcile.mjs --project planned-travel=/home/ubuntu/dev/planned.travel --project money-tracker-online=/home/ubuntu/dev/money-tracker.online --project smakopas-pl=/home/ubuntu/dev/smakopas.pl >> $HOME/.cache/cez/reconcile.log 2>&1
@@ -337,12 +337,12 @@ to `maxMonitoringSessions`; a `review` run has closed its session. A repair, a r
 launch each spend one unit; when it is gone the tick says "no free slot" for the rest, or
 "--max-launch N reached" when slots are still free but the tick has started its `--max-launch` runs.
 
-**A usage limit stops everything.** If any run in any project is parked on a provider's usage limit
+**A usage limit pauses its runner.** If any run in any project is parked on a provider's usage limit
 (`isParkedOnUsageLimit`, `reconcile.mjs:87`: a `failed` run with the engine's booked `autoResumeAt`,
 or the `Claude AI usage limit reached|<epoch>` envelope while its reset is still ahead), the tick
-launches nothing and repairs nothing, because the account has no window and a new run would only
-join the queue of failures. The engine resumes that run itself; the next tick after it has done so
-carries on. The digest is still published.
+launches and repairs no work on that runner, because the account has no window and a new run would
+only join the queue of failures. Other runners keep working. The engine resumes a parked run;
+successful activity on that runner clears an access-failure pause. The digest is still published.
 
 Then, per managed project and in this order:
 
@@ -411,7 +411,7 @@ Then, per managed project and in this order:
    anything past the capacity or `--max-launch`. Starts are 20 seconds apart: two Claude Code
    processes launched in the same second race on the OAuth refresh (PR #50). A repo whose script
    fails or does not know `--plan` launches nothing, and the tick says so.
-5. **Digest.** At most once per Warsaw day, on the first tick at or after 07:00 Europe/Warsaw (the
+5. **Digest.** At most once per UTC day, on the first tick at or after 07:00 UTC (the
    hour and the date come from `Intl`, so both clock changes are right whatever zone the host runs
    in), the body of the open issue titled exactly `Pipeline status` is replaced: the backlog by
    state, what waits for a person (held issues, pull requests labelled `blocked`), the
@@ -432,3 +432,16 @@ It never merges a PR (its one write to a pull request is the base merged into it
 and comment and the digest, and never touches `packages/`. A repository the cockpit has registered
 but the tick was not told to manage still counts toward capacity and the usage-limit pause, and is
 otherwise left alone.
+
+### Pipeline hardening rollout
+
+The Reconciler isolates provider access/subscription failures and usage-limit pauses by runner.
+A healthy Codex queue continues while Claude is unavailable. It preserves two repair attempts
+by project/workflow/target/error fingerprint across new run IDs, and refuses unreadable run
+snapshots because capacity is unknown. A corrupt state file cannot silently reset retry budgets.
+
+Projects with `pipeline.policyVersion` in `.ai/agentic.config.json` run their existing
+`close-fixed-issues.mjs --checkpoint` before planning each tick (dry-run stays read-only).
+After verifying the effective crontab, retire that project's older hourly close job and repeated
+housekeeping review jobs. Do not install a second scheduler. Digest time is now 07:00 UTC.
+No host service or schedule was changed by the implementation branch.
