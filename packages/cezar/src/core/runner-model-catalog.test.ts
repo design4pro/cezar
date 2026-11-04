@@ -1,5 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RunnerModelCatalog, type ModelOption } from './runner-model-catalog.ts';
+import { RunnerModelCatalog, lowestCostModel, type ModelOption } from './runner-model-catalog.ts';
+
+describe('lowestCostModel', () => {
+  const model = (id: string, label = id, description = ''): ModelOption => ({ id, label, description });
+
+  it('prefers low-cost model names and skips auto sentinels', () => {
+    expect(lowestCostModel([model('auto'), model('gpt-5'), model('gpt-5-mini')])).toBe('gpt-5-mini');
+    expect(lowestCostModel([model('sonnet'), model('haiku')])).toBe('haiku');
+  });
+
+  it('uses the first available model when the catalog has no low-cost hint', () => {
+    expect(lowestCostModel([model('auto'), model('vendor/model-a'), model('vendor/model-b')])).toBe('vendor/model-a');
+    expect(lowestCostModel([model('auto')])).toBeUndefined();
+  });
+});
 
 const models: ModelOption[] = [
   { id: 'gpt-latest', label: 'GPT Latest', description: 'Latest model' },

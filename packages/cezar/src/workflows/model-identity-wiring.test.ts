@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
 import { RunManager } from './run.ts';
+import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -40,6 +41,8 @@ describe('model identity wiring (dry run)', () => {
     savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_ARGS_FILE = process.env.CEZ_MOCK_ARGS_FILE;
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
+    savedEnv.HOME = process.env.HOME;
+    savedEnv.ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL;
     // Codex has no CEZ_DRY_RUN mock of its own, so the bundled app-server fixture stands in.
     // The step-model guard below must refuse BEFORE anything spawns; pointing the binary at the
     // fixture is what keeps a regression a failed assertion rather than a real, networked run.
@@ -50,6 +53,8 @@ describe('model identity wiring (dry run)', () => {
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
     delete process.env.CEZ_FOLLOWUPS;
+    process.env.HOME = repoRoot;
+    delete process.env.ANTHROPIC_MODEL;
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -119,6 +124,25 @@ describe('model identity wiring (dry run)', () => {
     const id = await runToEnd({ task: 'do the thing' });
     expect(capturedModel()).toBeUndefined();
     expect(store.getRun(id)?.modelIdentity).toBeUndefined();
+  }, 30_000);
+
+  it('uses the lowest available catalog model when no model is pinned', async () => {
+    manager.setModelCatalog(new RunnerModelCatalog({
+      adapters: {
+        claude: { discover: async () => [
+          { id: 'sonnet', label: 'Sonnet', description: 'Fast and capable' },
+          { id: 'haiku', label: 'Haiku', description: 'Fastest and lowest cost' },
+        ] },
+      },
+    }));
+    try {
+      const id = await runToEnd({ task: 'do the thing' });
+      expect(capturedModel()).toBe('haiku');
+      expect(store.getRun(id)?.model).toBe('haiku');
+      expect(store.getRun(id)?.modelIdentity).toBe('anthropic/haiku');
+    } finally {
+      manager.setModelCatalog(undefined);
+    }
   }, 30_000);
 
   it('a provider-qualified model is normalised to the bare wire form for claude', async () => {
@@ -235,6 +259,22 @@ describe('model identity wiring (dry run)', () => {
     }
     return capturedModel(1);
   }
+
+  it('applies the project model to a run and its continuation over stored pins', async () => {
+    try {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({
+        maxParallel: 1,
+        defaultModels: { claude: 'haiku' },
+      }), 'utf8');
+      const id = await runToEnd({ task: 'do the thing', model: 'opus' });
+      expect(capturedModel(0)).toBe('haiku');
+      expect(store.getRun(id)?.model).toBe('haiku');
+      expect(await continuedModel(id, {})).toBe('haiku');
+      expect(store.getRun(id)?.model).toBe('haiku');
+    } finally {
+      writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify({ maxParallel: 1 }), 'utf8');
+    }
+  }, 40_000);
 
   /** A settled run whose current backend is OpenCode, pinned to `model` — as after a #401 switch. */
   async function openCodeRun(model: string): Promise<string> {

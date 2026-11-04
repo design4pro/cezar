@@ -20,6 +20,14 @@ export interface RunnerModelCatalogAdapter {
   discover(): Promise<ModelOption[]>;
 }
 
+/** Pick a low-cost-looking model from the host's available list; the catalog has no pricing data. */
+export function lowestCostModel(models: readonly ModelOption[]): string | undefined {
+  const available = models.filter(({ id }) => id && !/^(auto|default)$/i.test(id));
+  const lowCost = /\b(haiku|mini|nano|flash|lite|small|economy|cheap)\b/i;
+  return available.find((model) => lowCost.test(`${model.id} ${model.label} ${model.description}`))?.id
+    ?? available[0]?.id;
+}
+
 export interface RunnerModelCatalogOptions {
   adapters: Partial<Record<RunnerId, RunnerModelCatalogAdapter>>;
   now?: () => number;
