@@ -114,11 +114,6 @@ import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
-import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
-import { discoverCodexModels } from '../core/codex-model-catalog.ts';
-import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
-import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
-import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
   PROVIDER_IDS,
   ProviderAuthService,
@@ -136,6 +131,7 @@ import {
   watchLogin,
 } from './provider-telemetry.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import { createRunnerModelCatalog } from '../core/runner-model-catalog-factory.ts';
 import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
 import { DashboardReader } from '../workspace/dashboard.ts';
 import { dashboardRoutes } from './dashboard.ts';
@@ -1406,15 +1402,8 @@ export function createApp(deps: ServerDeps) {
   // turns into a compile error instead.
   const bootRoot = deps.repoRoot;
   const bootDataDir = join(bootRoot, '.ai/cezar');
-  const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
-    adapters: {
-      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
-      codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
-      opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
-      junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
-      cursor: { discover: () => discoverCursorModels() },
-    },
-  });
+  const modelCatalog = deps.modelCatalog ?? createRunnerModelCatalog(bootRoot);
+  deps.manager.setModelCatalog?.(modelCatalog);
   const providerAuth = deps.providerAuth
     ?? new ProviderAuthService({ cwd: bootRoot, onInconclusive: (probe) => void reportInconclusiveProbe(probe) });
   const workspaceConfig = deps.workspaceConfig ?? {
@@ -1625,6 +1614,7 @@ export function createApp(deps: ServerDeps) {
       return listProjects(selector);
     },
     semaphore: deps.semaphore,
+    modelCatalog: (root) => deps.modelCatalog ?? createRunnerModelCatalog(root),
   });
   const webhooks = deps.webhooks ?? (webhooksEnabled() ? new WebhookCoordinator({
     mode: () => capabilities().localHandoff ? 'local' : 'hosted',
@@ -8273,6 +8263,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType & { shut
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
     semaphore: deps.semaphore,
+    modelCatalog: (root) => deps.modelCatalog ?? createRunnerModelCatalog(root),
     automationStore: (projectId, root) => automationCoordinator.store(projectId, root)!,
   });
   // #801: GitHub automations are opt-in. Off, the flag must remove the BEHAVIOR and not merely

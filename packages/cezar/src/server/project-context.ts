@@ -12,6 +12,7 @@ import { RunManager } from '../workflows/run.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { getRepoInfo } from './git.ts';
 import { resolveTrackerAgentEnv } from './tracker/agent-credentials.ts';
+import type { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 
 /**
  * Per-project server context (spec 2026-07-20-multi-project-workspace,
@@ -66,6 +67,7 @@ export interface ProjectContextDeps {
    *  When omitted, the map still shares one private instance across the
    *  managers it builds (workspace defaults, never refreshed). */
   semaphore?: WorkspaceSemaphore;
+  modelCatalog?: (root: string) => RunnerModelCatalog;
 }
 
 export type ProjectContextFailure = 'unknown-project' | 'missing-root';
@@ -252,7 +254,12 @@ export class ProjectContexts {
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
-    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id, resolveTrackerEnv: resolveTrackerAgentEnv });
+    const manager = new RunManager(store, project.root, {
+      semaphore: this.semaphore,
+      projectId: project.id,
+      resolveTrackerEnv: resolveTrackerAgentEnv,
+      modelCatalog: this.deps.modelCatalog?.(project.root),
+    });
     let context: ProjectContext | undefined;
     try {
       const launchKey = ensureLaunchKey(dataDir);

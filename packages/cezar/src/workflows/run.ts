@@ -72,8 +72,9 @@ import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { getTeamSkillsCached, materializeSkillDir, waitForTeamSkills } from '../skills-remote.ts';
 import { provisionSkills } from '../skills-provision.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
-import { readAgentModelProvider } from '../agent-config/models.ts';
+import { readAgentModelProvider, readAgentModelSettings } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
+import { lowestCostModel, type RunnerModelCatalog } from '../core/runner-model-catalog.ts';
 import { isLifecycleConfigTracked } from '../worktree-lifecycle/config.ts';
 import { generateCommitMessage } from './commit-message.ts';
 import { hasUnlanded, landInPlace, landingPromptPart, READ_ONLY_PROMPT, READ_ONLY_TOOLS, type LandResult } from './landing.ts';
@@ -1477,6 +1478,7 @@ export class RunManager {
 
   /** See the constructor option of the same name. */
   private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
+  private modelCatalog?: RunnerModelCatalog;
 
   constructor(
     private readonly store: RunStore,
@@ -1490,6 +1492,7 @@ export class RunManager {
        * reach an agent. Secrets are registered with RunStore before any output arrives.
        */
       resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+      modelCatalog?: RunnerModelCatalog;
       /** `TURN_INACTIVITY_TIMEOUT_MS` unless a test needs it short. */
       turnInactivityMs?: number;
       /** `AUTH_REFRESH_RETRY_DELAY_MS` unless a test needs it short. */
@@ -1508,6 +1511,7 @@ export class RunManager {
     this.branchNameWaitMs = options.branchNameWaitMs ?? BRANCH_NAME_WAIT_MS;
     this.projectId = options.projectId;
     this.resolveTrackerEnv = options.resolveTrackerEnv;
+    this.modelCatalog = options.modelCatalog;
     this.secrets = options.secrets ?? new SecretStore();
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
@@ -1562,6 +1566,34 @@ export class RunManager {
     };
     this.queueWatchdog = setInterval(() => void this.rescueStalledQueue(), QUEUE_WATCHDOG_MS);
     this.queueWatchdog.unref?.();
+  }
+
+  setModelCatalog(modelCatalog?: RunnerModelCatalog): void {
+    this.modelCatalog = modelCatalog;
+  }
+
+  private async resolveModel(runner: RunnerId, requested: string | undefined, config: CezConfig, cwd: string): Promise<string | undefined> {
+    if (agentModelsLocked(this.repoRoot)) {
+      const native = await readAgentModelSettings(runner, cwd).catch(() => ({ model: undefined as string | undefined }));
+      if (native.model && native.model !== 'auto') return native.model;
+    } else {
+      if (config.defaultModelsAuto?.[runner]) return this.lowestAvailableModel(runner);
+      const configured = config.defaultModels?.[runner];
+      if (configured) return configured;
+      if (requested) return requested;
+    }
+    const lowest = await this.lowestAvailableModel(runner);
+    if (lowest) return lowest;
+    const native = await readAgentModelSettings(runner, cwd).catch(() => ({ model: undefined as string | undefined }));
+    return native.model && native.model !== 'auto' ? native.model : undefined;
+  }
+
+  private async lowestAvailableModel(runner: RunnerId): Promise<string | undefined> {
+    try {
+      return lowestCostModel((await this.modelCatalog?.get(runner))?.models ?? []);
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -5258,13 +5290,16 @@ export class RunManager {
     // instead of `opus`). Fail loud here too rather than let the backend pick a default.
     let continueModel: string | undefined;
     try {
+      const config = await loadConfig(this.repoRoot);
+      const model = await this.resolveModel(continueBackend, record?.model, config, state.cwd);
       const normalized = normalizeModelForBackend(
         continueBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : record?.model,
+        model,
         { configuredProvider: await configuredModelProvider(continueBackend, state.cwd) },
       );
-      continueModel = normalized?.backendModel;
+      continueModel = agentModelsLocked(this.repoRoot) ? undefined : normalized?.backendModel;
       this.store.updateRun(runId, {
+        model,
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
       if (normalized) {
@@ -5560,11 +5595,12 @@ export class RunManager {
     // the task ran with, persisted for cost attribution / reproducible replay
     // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
     // can still override below); the authoritative fail-loud gate is at spawn.
+    const taskModel = await this.resolveModel(taskBackend, input.model, config, this.repoRoot);
     let modelIdentity: string | undefined;
     try {
       const normalized = normalizeModelForBackend(
         taskBackend,
-        agentModelsLocked(this.repoRoot) ? undefined : input.model,
+        taskModel,
         { configuredProvider: await configuredModelProvider(taskBackend, this.repoRoot) },
       );
       modelIdentity = normalized ? formatModelIdentity(normalized.identity) : undefined;
@@ -5576,6 +5612,7 @@ export class RunManager {
       status: 'running',
       startedAt: resumeStep ? original?.startedAt : new Date().toISOString(),
       runner: taskBackend,
+      model: taskModel,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
     });
@@ -7496,10 +7533,10 @@ export class RunManager {
     };
 
     const stepBackend = step.runner ?? taskBackend;
+    const config = await loadConfig(this.repoRoot);
+    const requestedModel = step.model ?? (stepBackend === taskBackend ? input.model : undefined);
     // The task's model was picked for the task's runner; a step on another runner gets its own default.
-    const stepModel = agentModelsLocked(this.repoRoot)
-      ? undefined
-      : step.model ?? (stepBackend === taskBackend ? input.model : undefined);
+    const stepModel = await this.resolveModel(stepBackend, requestedModel, config, state.cwd);
     // The step's own `model:` wins over the task's, which means a workflow written for one
     // backend hands its pin to whatever backend the task actually chose. `opus` is a Claude
     // tier alias; codex accepts the thread, then the API refuses every request on it and the
@@ -7522,12 +7559,13 @@ export class RunManager {
         stepModel,
         { configuredProvider: await configuredModelProvider(stepBackend, state.cwd) },
       );
-      backendModel = normalized?.backendModel;
+      backendModel = agentModelsLocked(this.repoRoot) ? undefined : normalized?.backendModel;
       // Persist the identity of what ACTUALLY runs (#405, review M1). The run-start echo
       // (line ~993) is best-effort from `taskBackend`/`input.model`; a per-step `runner`/`model`
       // override makes it assert a model that never ran. Re-write it here, from the resolved
       // step identity, so the record — the product of this PR — is always one that ran.
       this.store.updateRun(runId, {
+        model: stepModel,
         modelIdentity: normalized ? formatModelIdentity(normalized.identity) : undefined,
       });
       if (normalized) {
