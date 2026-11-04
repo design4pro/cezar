@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - develop
+      - design4pro
       - 'release/v*' # backports into a release line (docs/publishing.md § Release lines)
   push:
     branches:
@@ -75,6 +76,9 @@ jobs:
 
       - name: Run unit tests
         run: npm run test:unit
+
+      - name: Test host reconciler
+        run: npm test -- --root host/reconciler --config vitest.config.ts
 
       - name: Build application
         run: npm run build

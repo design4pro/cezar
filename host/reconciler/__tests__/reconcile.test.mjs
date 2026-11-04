@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checksState,
+  businessOutcome,
   createApi,
   decide,
   describe as describeAction,
@@ -33,15 +34,21 @@ import {
   parsePlan,
   pruneState,
   recoveryText,
+  repairKey,
   requiresUpToDate,
   retryableReceipts,
   slotsHeld,
   targetIssue,
   waitForQuietPoll,
-  warsawClock,
+  utcClock,
 } from "../reconcile.mjs";
 
 const NOW = Date.parse("2026-10-02T12:00:00Z");
+it("does not turn engine done or malformed handoffs into business completion", () => {
+  expect(businessOutcome("CEZ:DONE")).toBe("unknown");
+  expect(businessOutcome('OUTCOME: {"outcome":"implemented"}\nOUTCOME: {"outcome":"merged"}')).toBe("merged");
+  expect(businessOutcome('OUTCOME: {"outcome":"merged"}\nOUTCOME: broken')).toBe("unknown");
+});
 const HOUR = 3_600_000;
 const iso = (offsetMs) => new Date(NOW + offsetMs).toISOString();
 
@@ -144,18 +151,24 @@ describe("usage-limit pause", () => {
     expect(isParkedOnUsageLimit(run({ status: "running", autoResumeAt: iso(HOUR) }), NOW)).toBe(false);
   });
 
-  it("launches and repairs nothing while a run in ANY project is parked, but still publishes the digest", () => {
-    const parked = failedRun({ autoResumeAt: iso(HOUR), task: "Implement issue #9." });
-    const actions = decide(
-      snapshot(
-        [
-          project("pt", { plan: [act("implement", "#5")], runs: [failedRun({ task: "Implement issue #7." })], receipts: [receipt()] }),
-          project("cezar", { managed: false, runs: [parked] }),
-        ],
-        { state: { digests: { pt: "2026-10-01" } } },
-      ),
-    );
-    expect(actions.map((a) => a.type)).toEqual(["pause", "digest"]);
+  it("keeps Codex moving when Claude has lost subscription access", () => {
+    const parked = failedRun({ runner: "claude", error: "Subscription access expired", task: "Implement issue #9." });
+    const actions = decide(snapshot([
+      project("pt", { defaultRunner: "codex", runs: [parked], plan: [{ kind: "implement", target: "#10", task: "Implement issue #10.", workflow: "implement-ticket" }] }),
+    ]));
+    expect(ofType(actions, "launch")).toHaveLength(1);
+    expect(ofType(actions, "repair")).toHaveLength(0);
+  });
+
+  it("recognizes a recovered provider in another project", () => {
+    const failed = failedRun({ runner: "claude", error: "Subscription access expired", createdAt: iso(-4 * HOUR) });
+    const recovered = run({ runner: "claude", createdAt: iso(-HOUR) });
+    const actions = decide(snapshot([
+      project("pt", { runs: [failed], plan: [act("implement", "#10")] }),
+      project("other", { managed: false, runs: [recovered] }),
+    ]));
+    expect(ofType(actions, "pause")).toHaveLength(0);
+    expect(ofType(actions, "launch")).toHaveLength(1);
   });
 
   it("does not repair the run that is parked: the engine resumes it itself", () => {
@@ -645,31 +658,16 @@ describe("repair ladder", () => {
 describe("digest", () => {
   const due = (digests) => ofType(decide(snapshot([project("pt")], { state: { digests } })), "digest");
 
-  it("is due on the first tick at or after 07:00 Warsaw, once per Warsaw day", () => {
-    // 2026-10-02 is CEST (UTC+2): 07:00 in Warsaw is 05:00Z.
-    expect(digestDue(Date.parse("2026-10-02T04:59:00Z"), "2026-10-01")).toBe(false);
-    expect(digestDue(Date.parse("2026-10-02T05:00:00Z"), "2026-10-01")).toBe(true);
-    expect(digestDue(Date.parse("2026-10-02T05:00:00Z"), undefined)).toBe(true);
+  it("uses UTC independent of daylight saving time", () => {
+    expect(digestDue(Date.parse("2026-10-02T06:59:00Z"), "2026-10-01")).toBe(false);
+    expect(digestDue(Date.parse("2026-10-02T07:00:00Z"), "2026-10-01")).toBe(true);
     expect(digestDue(Date.parse("2026-10-02T17:00:00Z"), "2026-10-02")).toBe(false);
+    expect(utcClock(Date.parse("2026-03-29T07:00:00Z")).hour).toBe(7);
   });
 
-  it("follows Warsaw across both clock changes, whatever zone the host runs in", () => {
-    // Summer time began 2026-03-29 at 01:00Z; ended 2026-10-25 at 01:00Z.
-    expect(digestDue(Date.parse("2026-03-28T05:59:00Z"), "")).toBe(false); // CET, 06:59
-    expect(digestDue(Date.parse("2026-03-28T06:00:00Z"), "")).toBe(true); // CET, 07:00
-    expect(digestDue(Date.parse("2026-03-29T04:59:00Z"), "")).toBe(false); // CEST, 06:59
-    expect(digestDue(Date.parse("2026-03-29T05:00:00Z"), "")).toBe(true); // CEST, 07:00
-    expect(digestDue(Date.parse("2026-10-24T05:00:00Z"), "")).toBe(true); // CEST, 07:00
-    expect(digestDue(Date.parse("2026-10-26T05:59:00Z"), "")).toBe(false); // CET, 06:59
-    expect(digestDue(Date.parse("2026-10-26T06:00:00Z"), "")).toBe(true); // CET, 07:00
-  });
-
-  it("starts a new day at Warsaw midnight, not at UTC midnight", () => {
-    expect(warsawClock(Date.parse("2026-10-02T21:59:00Z"))).toEqual({ date: "2026-10-02", hour: 23 });
-    expect(warsawClock(Date.parse("2026-10-02T22:00:00Z"))).toEqual({ date: "2026-10-03", hour: 0 });
-    // 00:30 Warsaw on the 3rd is a new day with no digest yet, but it is not 07:00.
-    expect(digestDue(Date.parse("2026-10-02T22:30:00Z"), "2026-10-02")).toBe(false);
-    expect(digestDue(Date.parse("2026-10-03T05:00:00Z"), "2026-10-02")).toBe(true);
+  it("starts a new day at UTC midnight", () => {
+    expect(utcClock(Date.parse("2026-10-02T23:59:00Z"))).toEqual({ date: "2026-10-02", hour: 23 });
+    expect(utcClock(Date.parse("2026-10-03T00:00:00Z"))).toEqual({ date: "2026-10-03", hour: 0 });
   });
 
   it("is decided per project from the state's last date", () => {
@@ -776,6 +774,7 @@ describe("state file", () => {
       digests: { pt: "2026-10-02", mt: 1 },
     });
     expect(state).toEqual({
+      targets: {},
       repairs: { good: { attempts: 1, at: "2026-10-01T00:00:00Z", escalated: true } },
       retriedReceipts: { a: "2026-10-01T00:00:00Z" },
       digests: { pt: "2026-10-02" },
@@ -900,4 +899,19 @@ describe("createApi", () => {
     ).rejects.toThrow("fetch failed");
     expect(calls).toBe(2);
   });
+});
+
+it("does not reset repair attempts for a new run with the same problem", () => {
+  const failed = failedRun({ task: "Implement issue #777." });
+  const input = snapshot([project("pt", { runs: [failed] })]);
+  input.state.targets = { [repairKey("pt", failed)]: { attempts: 2, at: iso(0) } };
+  expect(ofType(decide(input), "repair")).toHaveLength(0);
+  expect(ofType(decide(input), "escalate")).toHaveLength(1);
+  expect(ofType(decide(input), "digest")).toHaveLength(1);
+});
+
+it("does not reset a lost-session retry budget when a relaunch gets another session ID", () => {
+  const first = failedRun({ task: "Implement issue #777.", error: "No conversation found with session ID old-session" });
+  const next = failedRun({ task: "#777", error: "No conversation found with session ID new-session" });
+  expect(repairKey("pt", first)).toBe(repairKey("pt", next));
 });

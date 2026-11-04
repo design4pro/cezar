@@ -58,7 +58,7 @@ const SYNC_MARGIN_MS = 10_000;
 /** How long a sync waits for a quiet moment between polls before it gives up for this tick. */
 const SYNC_WAIT_MS = 2 * 60_000;
 const SYNC_RECHECK_MS = 2_000;
-const DIGEST_ZONE = "Europe/Warsaw";
+const DIGEST_ZONE = "UTC";
 const DIGEST_HOUR = 7;
 const DIGEST_TITLE = "Pipeline status";
 
@@ -134,7 +134,7 @@ export function targetIssue(run) {
 
 const NON_RETRYABLE = [
   [/not found on PATH/i, "the runner CLI is not installed"],
-  [/credentials are unavailable|is disabled\. Enable it/i, "the provider has no usable login"],
+  [/credentials are unavailable|is disabled\. Enable it|can't use your .*subscription|subscription.*(?:access|expired|inactive)|(?:access|permission).*subscription|authentication failed|unauthorized|invalid api key/i, "the provider has no usable login"],
   [/unknown workflow/i, "the workflow no longer exists"],
 ];
 const LOST_SESSION_RE = /No conversation found with session ID/i;
@@ -284,20 +284,20 @@ const zoneParts = new Intl.DateTimeFormat("en-CA", {
   hourCycle: "h23",
 });
 
-/** The Warsaw calendar date and hour of an instant, whatever zone the host runs in (cron: UTC). */
-export function warsawClock(now) {
+/** The UTC calendar date and hour, independent of the host's local zone. */
+export function utcClock(now) {
   const parts = Object.fromEntries(zoneParts.formatToParts(now).map((p) => [p.type, p.value]));
   return { date: `${parts.year}-${parts.month}-${parts.day}`, hour: Number(parts.hour) };
 }
 
-/** The first tick at or after 07:00 Warsaw on a day that has not had its digest. */
+/** The first tick at or after 07:00 UTC on a day that has not had its digest. */
 export function digestDue(now, lastDigestDate) {
-  const { date, hour } = warsawClock(now);
+  const { date, hour } = utcClock(now);
   return hour >= DIGEST_HOUR && lastDigestDate !== date;
 }
 
 export function emptyState() {
-  return { repairs: {}, retriedReceipts: {}, digests: {} };
+  return { repairs: {}, targets: {}, retriedReceipts: {}, digests: {} };
 }
 
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -312,6 +312,8 @@ export function normalizeState(raw) {
       if (entry.escalated === true) state.repairs[id].escalated = true;
     }
   }
+  for (const [key, entry] of Object.entries(isRecord(raw.targets) ? raw.targets : {}))
+    if (isRecord(entry) && Number.isInteger(entry.attempts) && entry.attempts >= 0 && typeof entry.at === "string") state.targets[key] = entry;
   for (const [id, at] of Object.entries(isRecord(raw.retriedReceipts) ? raw.retriedReceipts : {})) {
     if (typeof at === "string") state.retriedReceipts[id] = at;
   }
@@ -462,13 +464,16 @@ export function decide(snapshot) {
   const { now, state } = snapshot;
   const actions = [];
   const everyRun = snapshot.projects.flatMap((project) => project.runs);
-  const parked = everyRun.find((run) => isParkedOnUsageLimit(run, now));
-  if (parked) {
-    actions.push({
-      type: "pause",
-      reason: `run ${parked.id.slice(0, 8)} is parked on a usage limit: nothing starts and nothing is repaired`,
-    });
+  const blockedRunners = new Set();
+  for (const project of snapshot.projects) {
+    for (const run of project.runs) {
+      const runner = run.runner ?? project.defaultRunner ?? "claude";
+      if (isParkedOnUsageLimit(run, now) || (run.status === "failed" && nonRetryableReason(run)?.includes("login") &&
+          !snapshot.projects.some((peer) => peer.runs.some((later) => (later.runner ?? peer.defaultRunner ?? "claude") === runner && later.status === "done" && later.createdAt > run.createdAt))))
+        blockedRunners.add(runner);
+    }
   }
+  for (const runner of blockedRunners) actions.push({ type: "pause", reason: `${runner} unavailable; only that runner is paused` });
   const free = snapshot.maxParallel - slotsHeld(everyRun, snapshot.maxMonitoring);
   const initialBudget = Math.min(Math.max(0, free), snapshot.maxLaunch);
   let budget = initialBudget;
@@ -520,8 +525,9 @@ export function decide(snapshot) {
     }
     prRuns.sort((a, b) => PR_KINDS.indexOf(a.kind) - PR_KINDS.indexOf(b.kind));
 
-    if (!parked) {
+    {
       for (const receipt of retryableReceipts(project.receipts, now, state)) {
+        if (blockedRunners.has(project.defaultRunner ?? "claude")) continue;
         if (budget <= 0) {
           actions.push(wait(project.id, `retry of receipt ${receipt.receiptId.slice(0, 8)}`));
           continue;
@@ -540,8 +546,9 @@ export function decide(snapshot) {
           actions.push({ type: "skip", project: project.id, subject, reason: `not retryable: ${why}` });
           continue;
         }
+        if (blockedRunners.has(run.runner ?? project.defaultRunner ?? "claude")) continue;
         const entry = state.repairs[run.id];
-        const attempts = entry?.attempts ?? 0;
+        const attempts = Math.max(entry?.attempts ?? 0, state.targets?.[repairKey(project.id, run)]?.attempts ?? 0);
         if (attempts >= MAX_REPAIRS) {
           if (!entry?.escalated) {
             actions.push({ type: "escalate", project: project.id, run, issue: targetIssue(run) });
@@ -574,7 +581,9 @@ export function decide(snapshot) {
       for (const planned of [...prRuns, ...(project.plan ?? [])]) {
         const subject = `${planned.kind} ${planned.target}`;
         const skip = (reason) => actions.push({ type: "skip", project: project.id, subject, reason });
-        if (startedKinds.has(planned.kind)) {
+        if (blockedRunners.has(planned.runner ?? project.defaultRunner ?? "claude")) {
+          skip("runner unavailable");
+        } else if (startedKinds.has(planned.kind)) {
           skip(`a ${planned.kind} run started this tick`);
         } else if (owned.some((task) => mentionsTarget(task, planned.target))) {
           skip("a run already owns this target");
@@ -597,7 +606,8 @@ export function decide(snapshot) {
       }
     }
 
-    if (digestDue(now, state.digests[project.id])) actions.push({ type: "digest", project: project.id });
+    if (digestDue(now, state.digests[project.id]) || actions.some((action) => action.type === "escalate" && action.project === project.id))
+      actions.push({ type: "digest", project: project.id });
   }
   return actions;
 }
@@ -620,6 +630,13 @@ const bullets = (items, render, max = 30) => {
   if (items.length > max) shown.push(`- ... and ${items.length - max} more`);
   return shown.join("\n");
 };
+
+export function businessOutcome(handoff) {
+  try {
+    const record = JSON.parse([...handoff.matchAll(/^OUTCOME: (.+)$/gm)].at(-1)?.[1] ?? "null");
+    return ["no-op", "blocked", "implemented", "merged", "deployed", "verified"].includes(record?.outcome) ? record.outcome : "unknown";
+  } catch { return "unknown"; }
+}
 
 /**
  * The body of the "Pipeline status" issue: everything that waits for a person, and the pulse of
@@ -654,7 +671,7 @@ export function digestBody({ now, issues, prs, runs, state }) {
     `### Escalated or not retryable (${needAPerson.length})`,
     bullets(needAPerson, (run) => `${runLine(run)}: ${firstErrorLine(run)}`),
     `### Done (${done.length})`,
-    bullets(done, (run) => `${runLine(run)}: ${run.task.split("\n")[0].slice(0, 100)}`),
+    bullets(done, (run) => `${runLine(run)}: ${run.task.split("\n")[0].slice(0, 100)} — business outcome: ${run.businessOutcome ?? "unknown"}`),
   ].join("\n\n");
 }
 
@@ -745,7 +762,9 @@ const readJson = (path) => {
 };
 
 function loadState() {
-  return normalizeState(readJson(STATE_FILE));
+  const raw = readJson(STATE_FILE);
+  if (raw === null && existsSync(STATE_FILE)) throw new Error("Reconciler state is unreadable; retry budgets are unknown");
+  return normalizeState(raw);
 }
 
 /** tmp + rename, so a crash mid-write leaves the old file whole. */
@@ -953,8 +972,7 @@ function readReceipts(root) {
 async function fetchRuns(api, id) {
   const response = await api.get(`/api/v1/p/${id}/runs`);
   if (response.ok && Array.isArray(response.json)) return response.json;
-  log(id, `runs: unreadable (${answered(response)}), counted as none`);
-  return [];
+  throw new Error(`runs for ${id} unreadable (${answered(response)}); capacity is unknown`);
 }
 
 /** Print the digest in a dry run; otherwise create or replace the "Pipeline status" issue. */
@@ -964,7 +982,15 @@ async function publishDigest(project, { now, state, dryRun }) {
   const prs = JSON.parse(
     run("gh", ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,title,url,labels"], { cwd: root }),
   );
-  const body = digestBody({ now, issues, prs, runs: project.runs, state });
+  const runs = project.runs.map((record) => {
+    let outcome = "unknown";
+    if (/^[a-zA-Z0-9-]+$/.test(record.id)) {
+      try { outcome = businessOutcome(readFileSync(join(root, ".ai/cezar/runs", `${record.id}.handoff.md`), "utf8")); }
+      catch { /* Engine completion alone is not a business outcome. */ }
+    }
+    return { ...record, businessOutcome: outcome };
+  });
+  const body = digestBody({ now, issues, prs, runs, state });
   if (dryRun) return console.log(`--- ${id}: "${DIGEST_TITLE}" body ---\n${body}\n---`);
 
   const repo = repoOf(root);
@@ -975,7 +1001,7 @@ async function publishDigest(project, { now, state, dryRun }) {
   ).items.find((item) => item.title === DIGEST_TITLE);
   if (found) ghApi(root, ["-X", "PATCH", `repos/${repo}/issues/${found.number}`], { body });
   else ghApi(root, ["-X", "POST", `repos/${repo}/issues`], { title: DIGEST_TITLE, body, labels: ["do-not-close"] });
-  state.digests[id] = warsawClock(now).date;
+  state.digests[id] = utcClock(now).date;
   log(id, `digest: ${found ? `replaced the body of #${found.number}` : "created the issue"}`);
 }
 
@@ -993,8 +1019,19 @@ async function escalate(action, { root }, { state, now }) {
 }
 
 /** Start one run, or reopen one, and return its id; null when the cockpit refused. */
+export function repairKey(project, run) {
+  const problem = LOST_SESSION_RE.test(firstErrorLine(run)) ? "lost-session" : firstErrorLine(run)
+    .replace(/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}/gi, "<id>");
+  return JSON.stringify([project, run.workflow, targetIssue(run) ?? run.task?.split("\n")[0].trim(), problem]);
+}
+
 async function start(action, { api, state, now }) {
   const at = new Date(now).toISOString();
+  if (action.type === "repair") {
+    state.targets ??= {};
+    state.targets[repairKey(action.project, action.run)] = { attempts: action.attempt, at };
+    saveState(state, now);
+  }
   const refused = (response, what) => {
     log(action.project, `${what} refused: ${answered(response)}`);
     return null;
@@ -1025,7 +1062,7 @@ async function start(action, { api, state, now }) {
     autonomous: true,
     variants: 1,
     generateFollowups: false,
-    ...(repair && source.runner ? { runner: source.runner } : {}),
+    ...(source.runner ? { runner: source.runner } : {}),
     ...(repair && source.model ? { model: source.model } : {}),
   });
   if (!response.ok) return refused(response, repair ? "relaunch" : "launch");
@@ -1072,10 +1109,19 @@ export async function main(argv) {
   const projects = [];
   for (const { id, root } of managed) {
     syncProject({ id, root }, dryRun);
+    const effective = await api.get(`/api/v1/p/${id}/config`);
+    const runnerKnown = effective.ok && typeof effective.json?.defaultRunner === "string";
+    if (!runnerKnown) log(id, "effective runner is unavailable; this project's launches and repairs are paused");
+    if (readJson(join(root, ".ai/agentic.config.json"))?.pipeline?.policyVersion) {
+      try {
+        log(id, run("node", ["scripts/agents/close-fixed-issues.mjs", "--checkpoint", dryRun ? "--dry-run" : "--apply"], { cwd: root }));
+      } catch (error) { log(id, `merge reconciliation failed: ${failure(error)}`); }
+    }
     projects.push({
       id,
       root,
-      managed: true,
+      managed: runnerKnown,
+      defaultRunner: runnerKnown ? effective.json.defaultRunner : undefined,
       runs: await fetchRuns(api, id),
       plan: readPlan({ id, root }),
       receipts: readReceipts(root),

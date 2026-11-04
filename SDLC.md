@@ -232,11 +232,9 @@ Three amendment rules are specific to this document's shape:
   the release branch, which `design4pro` is promoted into as a separate, human-made step. `main` is
   **not** where day-to-day work lands, and a skill that reads `baseBranch` from
   `.ai/agentic.config.json` gets `design4pro`.
-- **CI does not run on this branch yet.** `.github/workflows/ci.yml` triggers on `main` and
-  `develop` only, so a PR into `design4pro` has no required checks: the validation gate an agent
-  runs locally before opening the PR is currently the _only_ evidence, and a reviewer must read the
-  gate output in the run summary rather than a green tick. Adding `design4pro` to the workflow's
-  triggers is tracked in `.ai/specs/2026-09-17-afk-intake-bridge.md`.
+- **CI runs on PRs into `design4pro`.** The workflow runs the validation suite, including the
+  host Reconciler's separate tests. Local sandbox failures must be disclosed; only completed CI
+  checks establish a passing gate. This does not change branch-protection settings or publish a release.
 - **Who starts a run.** No label does (ADR 0008). An issue a maintainer opens is triaged on the
   event, a ready issue is implemented by the two-hour schedule, and a person can start any
   workflow by hand from the cockpit.
